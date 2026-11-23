@@ -184,6 +184,70 @@ function guessAisle(key) {
   return 'Other';
 }
 
+/* TikTok and other video captions: hashtags, emoji bullets, ingredients often in one comma list.
+   Returns { title, ingredients, steps, cleaned }. */
+const ING_MARK = /(ingredients?|what you(?:'|’|\s+wi)ll need|you(?:'|’)ll need|you will need|shopping list)\s*(?:list)?\s*[:：\-–—]*/i;
+const STEP_MARK = /(instructions|directions|method|steps|how to make(?: it)?|to make|preparation|prep)\s*[:：\-–—]+|(instructions|directions|method|steps)\s*(?=\n|$|\s*\d+[.)])/i;
+const PREP_TAIL = /^(drained|rinsed|chopped|diced|minced|sliced|softened|melted|divided|cubed|shredded|grated|peeled|to taste|optional|for (garnish|serving|topping)|room temp\w*|at room temperature|beaten|cooked)\b/i;
+const looksLikeIngredient = s => /^([\d½⅓⅔¼¾⅛]|a |an |one |half |pinch |dash |handful )/i.test(s) || /\b(cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|ounces?|lbs?|pounds?|cloves?|cans?|grams?|g\b|ml)\b/i.test(s);
+
+function cleanCaptionLine(l) {
+  return l.replace(/(^|\s)#[\p{L}\p{N}_]+/gu, ' ')                        // hashtags
+    .replace(/^[^\p{L}\p{N}½⅓⅔¼¾⅛(]+/u, '')                                  // leading bullets / emoji
+    .replace(/[\p{Extended_Pictographic}️‍]/gu, ' ')              // emoji anywhere
+    .replace(/\s+/g, ' ').trim();
+}
+function splitList(text) {
+  const lines = text.split(/\n+/).map(cleanCaptionLine).filter(Boolean);
+  let parts = lines.length >= 2 ? lines : (lines[0] || '').split(/\s*[,;|•·]\s*|\s+-\s+/).map(s => s.trim()).filter(Boolean);
+  // Glue "drained" / "to taste" back onto the item before it.
+  const out = [];
+  for (const p of parts) {
+    if (out.length && PREP_TAIL.test(p) && !looksLikeIngredient(p)) out[out.length - 1] += ', ' + p;
+    else out.push(p);
+  }
+  return out.filter(s => s.length > 1 && s.length < 140);
+}
+function splitSteps(text) {
+  const lines = text.split(/\n+/).map(cleanCaptionLine).filter(Boolean);
+  let steps = lines.length >= 2 ? lines
+    : (lines[0] || '').split(/\s*(?:^|\s)(?:step\s*)?\d+[.):]\s+/i).map(s => s.trim()).filter(Boolean);
+  if (steps.length === 1 && steps[0].length > 160) steps = steps[0].split(/(?<=[.!])\s+(?=[A-Z])/);
+  return steps.map(s => s.replace(/^(step\s*)?\d+[.):]\s*/i, '').trim()).filter(s => s.length > 3);
+}
+
+function parseCaption(caption) {
+  const text = String(caption || '').replace(/\r/g, '');
+  const cleaned = text.split('\n').map(cleanCaptionLine).filter(Boolean).join('\n');
+  const iM = ING_MARK.exec(text);
+  let before = text, ingText = '', stepText = '';
+  if (iM) {
+    before = text.slice(0, iM.index);
+    const after = text.slice(iM.index + iM[0].length);
+    const sM = STEP_MARK.exec(after);
+    ingText = sM ? after.slice(0, sM.index) : after;
+    stepText = sM ? after.slice(sM.index + sM[0].length) : '';
+  } else {
+    const sM = STEP_MARK.exec(text);
+    const body = sM ? text.slice(0, sM.index) : text;
+    stepText = sM ? text.slice(sM.index + sM[0].length) : '';
+    const lines = body.split('\n').map(cleanCaptionLine).filter(Boolean);
+    before = lines.length ? lines[0] : '';
+    const rest = lines.slice(1).join('\n');
+    const candidates = splitList(lines.length > 1 ? rest : (lines[0] || ''));
+    ingText = candidates.filter(looksLikeIngredient).join('\n');
+    if (!stepText) stepText = lines.slice(1).filter(l => !looksLikeIngredient(l) && l.length > 40).join('\n');
+  }
+  let ingredients = splitList(ingText);
+  // Without a heading, keep only things that look like ingredients.
+  if (!iM) ingredients = ingredients.filter(looksLikeIngredient);
+  const steps = splitSteps(stepText);
+  const titleLine = cleanCaptionLine(before.split('\n').map(cleanCaptionLine).find(Boolean) || '');
+  let title = titleLine.split(/(?<=[.!?])\s|\s[|–—-]\s/)[0].replace(/[:\-–—]+$/, '').trim();
+  if (title.length > 70) title = title.slice(0, 67).replace(/\s+\S*$/, '') + '…';
+  return { title, ingredients: ingredients.slice(0, 60), steps: steps.slice(0, 40), cleaned };
+}
+
 /* Split pasted recipe text into title, ingredient lines and steps. */
 function parseRecipeText(text) {
   const lines = String(text || '').split(/\r?\n/)
@@ -196,6 +260,9 @@ function parseRecipeText(text) {
   if (iIng >= 0 && iStep > iIng) {
     ings = lines.slice(iIng + 1, iStep);
     steps = lines.slice(iStep + 1);
+    if (iIng > 0) title = lines[0];
+  } else if (iIng >= 0 && iStep < 0) {
+    ings = lines.slice(iIng + 1).filter(l => l.length < 120);
     if (iIng > 0) title = lines[0];
   } else {
     for (const l of lines.slice(1)) {

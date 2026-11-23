@@ -66,6 +66,45 @@ function minutes(iso: unknown): number {
   return (Number(m[1] || 0) * 24 + Number(m[2] || 0)) * 60 + Number(m[3] || 0);
 }
 
+// TikTok: no recipe data, but the page carries the video's caption, which is where
+// creators usually list ingredients (and sometimes steps). Return it for the app to sort out.
+function tiktokFromHtml(html: string) {
+  const m = /<script[^>]*id=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i.exec(html);
+  if (m) {
+    try {
+      const scope = JSON.parse(m[1])?.__DEFAULT_SCOPE__ || {};
+      const item = scope["webapp.video-detail"]?.itemInfo?.itemStruct;
+      if (item?.desc) return { caption: String(item.desc), author: String(item.author?.uniqueId || "") };
+    } catch { /* fall through */ }
+  }
+  const d = /"desc":"((?:[^"\\]|\\.)*)"/.exec(html);
+  if (d) { try { return { caption: JSON.parse(`"${d[1]}"`), author: "" }; } catch { /* ignore */ } }
+  return null;
+}
+
+async function importTikTok(target: URL) {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+  };
+  let caption = "", author = "", finalUrl = target.href;
+  try {
+    const res = await fetch(target.href, { redirect: "follow", headers, signal: AbortSignal.timeout(15000) });
+    finalUrl = res.url || finalUrl;
+    const got = tiktokFromHtml((await res.text()).slice(0, 4_000_000));
+    if (got) ({ caption, author } = got);
+  } catch { /* try oEmbed below */ }
+  if (!caption) {
+    try {
+      const o = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(finalUrl)}`, { signal: AbortSignal.timeout(10000) });
+      const j = await o.json();
+      caption = String(j.title || ""); author = author || String(j.author_unique_id || j.author_name || "");
+    } catch { /* nothing */ }
+  }
+  if (!caption.trim()) return json({ error: "no_caption" }, 422);
+  return json({ kind: "tiktok", caption, author, sourceUrl: finalUrl.split("?")[0] });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   let url = "";
@@ -73,6 +112,7 @@ Deno.serve(async (req) => {
   let target: URL;
   try { target = new URL(url); } catch { return json({ error: "bad_url" }, 400); }
   if (!/^https?:$/.test(target.protocol)) return json({ error: "bad_url" }, 400);
+  if (/(^|\.)tiktok\.com$/i.test(target.hostname)) return importTikTok(target);
 
   let html = "";
   try {
