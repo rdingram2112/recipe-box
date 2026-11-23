@@ -357,6 +357,7 @@ function render() {
   banner.hidden = Store !== Local;
   banner.textContent = 'Not connected yet: recipes are saved on this device only. Follow SETUP.md to share with your household.';
   $('#account-btn').hidden = !(Store === Remote && S.user);
+  renderPicker();
   const app = $('#app');
   const f = document.activeElement, focusId = f && f.id, sel = f && f.selectionStart;
   if (!S.ready) app.innerHTML = `<div class="empty"><h2>Opening Pantry Prep…</h2></div>`;
@@ -367,6 +368,34 @@ function render() {
   else if (S.view === 'account') app.innerHTML = viewAccount();
   else app.innerHTML = viewRecipes();
   if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { if (sel != null) el.setSelectionRange(sel, sel); } catch {} } }
+}
+
+/* Phone header: a dropdown of every pantry and its categories (uses the phone's own picker). */
+function renderPicker() {
+  const box = $('#pantry-picker');
+  const show = S.ready && !(Store === Remote && !S.user) && !S.notMember;
+  box.hidden = !show;
+  if (!show) { box.innerHTML = ''; return; }
+  const ps = pantries();
+  const val = (p, c) => JSON.stringify([p, c]);
+  const current = val(S.pantry, S.category);
+  const opt = (v, text) => `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(text)}</option>`;
+  const allCats = categoriesFor('all');
+  let html = `<optgroup label="Everyone">${opt(val('all', null), `All recipes (${S.recipes.length})`)}
+    ${allCats.cats.map(c => opt(val('all', c.name), `${c.name} (${c.count})`)).join('')}</optgroup>`;
+  for (const p of ps) {
+    const { cats, none } = categoriesFor(p.id);
+    html += `<optgroup label="${esc(p.label)}${p.mine ? ' (you)' : ''}">
+      ${opt(val(p.id, null), `All of ${p.label} (${p.count})`)}
+      ${cats.map(c => opt(val(p.id, c.name), `${c.name} (${c.count})`)).join('')}
+      ${none && cats.length ? opt(val(p.id, NONE), `No category (${none})`) : ''}</optgroup>`;
+  }
+  if (Store === Remote) html += `<optgroup label="Account"><option value="${esc(JSON.stringify(['__account', null]))}">Account &amp; sign out</option></optgroup>`;
+  const cur = ps.find(p => p.id === S.pantry);
+  const top = cur ? cur.label : 'Everyone';
+  const main = S.category == null ? 'All recipes' : S.category === NONE ? 'No category' : S.category;
+  box.innerHTML = `<span class="picker-label"><span class="picker-text"><small>${esc(top)}</small><span>${esc(main)}</span></span><span aria-hidden="true">▾</span></span>
+    <select id="pantry-select" aria-label="Pantry and category">${html}</select>`;
 }
 
 function viewAuth() {
@@ -432,7 +461,7 @@ function viewRecipes() {
       ${viewImporter()}
       <div class="toolbar"><h2 class="pantry-title">${esc(heading)}</h2>
         ${inPantry.length > 3 ? `<input type="text" id="search" placeholder="Search recipes or ingredients" value="${esc(S.q)}" autocomplete="off">` : ''}</div>
-      ${viewRenameCategory()}
+      ${viewRenameCategory()}${viewRenamePantry(cur)}
       ${!cats.length && S.recipes.length ? `<p class="note">Sort recipes into categories like BBQ or Sandwiches: open a recipe and tap “Add a category”.</p>` : ''}
       ${body}
     </div></div>`;
@@ -441,18 +470,20 @@ function viewRecipes() {
 function viewPantries(ps) {
   const item = (id, label, count, extra = '') => `<button class="pantry ${S.pantry === id && S.category == null ? 'on' : ''}" data-act="pantry" data-id="${esc(id)}" aria-pressed="${S.pantry === id}">
       <span>${esc(label)}${extra}</span><span class="num muted">${count}</span></button>${S.pantry === id ? viewCategories() : ''}`;
-  const mine = ps.find(p => p.mine);
-  const rename = S.renaming && mine
-    ? `<form id="rename-form" class="rename"><input type="text" id="rename-input" value="${esc(mine.label)}" maxlength="40" aria-label="Pantry name"><button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-rename">Cancel</button></form>`
-    : '';
   return `<aside class="pantries" aria-label="Pantries">
     <h3>Pantries</h3>
     <div class="pantry-list">
       ${item('all', 'All recipes', S.recipes.length)}
       ${ps.map(p => item(p.id, p.label, p.count, p.mine ? ' <span class="you">you</span>' : '')).join('')}
     </div>
-    ${rename || (mine ? `<button class="linkish rename-link" data-act="rename-pantry">Rename ${esc(mine.label)}</button>` : '')}
   </aside>`;
+}
+
+function viewRenamePantry(cur) {
+  if (!cur || !cur.mine || S.category != null) return '';
+  if (S.renaming) return `<form id="rename-form" class="catline"><input type="text" id="rename-input" value="${esc(cur.label)}" maxlength="40" aria-label="Pantry name">
+      <button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-rename">Cancel</button></form>`;
+  return `<button class="linkish" data-act="rename-pantry">Rename your pantry</button>`;
 }
 
 function viewCategories() {
@@ -716,6 +747,15 @@ document.addEventListener('click', async e => {
 
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.id === 'pantry-select') {
+    try {
+      const [p, c] = JSON.parse(el.value);
+      if (p === '__account') { navTo('account'); return; }
+      S.pantry = p; S.category = c; S.q = ''; S.renamingCat = false; writePref('pantry', p);
+      navTo('recipes');
+    } catch {}
+    return;
+  }
   if (el.dataset && el.dataset.act === 'check') { const k = el.dataset.key, on = el.checked; changeList(l => { if (on) l.checked[k] = true; else delete l.checked[k]; }); }
 });
 document.addEventListener('toggle', e => { if (e.target.id === 'paste-details') S.pasteOpen = e.target.open; }, true);
