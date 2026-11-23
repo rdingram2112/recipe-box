@@ -4,7 +4,7 @@
 
 const CFG = window.RECIPE_BOX_CONFIG || {};
 /* Bump together with version.json and the ?v= numbers in index.html on every publish. */
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 const CACHE_KEY = 'recipe-box-cache-v1';
 const LOCAL_KEY = 'recipe-box-local-v1';
 
@@ -19,6 +19,9 @@ const S = {
   settingCat: false, renamingCat: false,
 };
 const NONE = '__none__';
+// Opened from an invite link (?join=CODE): remember the code until they've joined.
+(() => { const m = /[?&]join=([A-Za-z0-9]{6,40})/.exec(location.search); if (m) writePref('join', m[1]); })();
+const joinCode = () => readPref('join') || '';
 function readPref(k) { try { return localStorage.getItem('recipe-box-' + k); } catch { return null; } }
 function writePref(k, v) { try { localStorage.setItem('recipe-box-' + k, v); } catch {} }
 const doneSteps = new Set();
@@ -110,6 +113,16 @@ const Remote = {
   async setHouseholdName(household, label) {
     const { error } = await this.client.from('households').upsert({ household, label });
     if (error) throw error;
+  },
+  async getInviteCode() { const { data, error } = await this.client.rpc('get_invite_code'); return error ? null : data; },
+  async resetInviteCode() { const { data, error } = await this.client.rpc('reset_invite_code'); if (error) throw error; return data; },
+  async householdsForInvite(code) {
+    const { data, error } = await this.client.rpc('households_for_invite', { p_code: code });
+    return error ? [] : data || [];
+  },
+  async joinWithInvite(code, household, label) {
+    const { data, error } = await this.client.rpc('join_with_invite', { p_code: code, p_household: household || '', p_label: label || '' });
+    if (error) throw error; return data;
   },
   async setPrice(key, data) {
     const { error } = await this.client.from('prices').upsert({ key, data, updated_at: new Date().toISOString() });
@@ -448,9 +461,12 @@ function renderPicker() {
 
 function viewAuth() {
   const m = S.authMsg;
+  const invited = !!joinCode();
   return `<form class="auth" id="auth-form">
-    <h1>Sign in</h1>
-    <p class="muted" style="margin:0">Use the email that's on your household list.</p>
+    <h1>${invited ? "You're invited to Pantry Prep" : 'Sign in'}</h1>
+    <p class="muted" style="margin:0">${invited
+      ? 'Shared recipes and weekly grocery lists. New here? Enter your email and a password, then tap <b>Create account</b>. Already have an account? Tap <b>Sign in</b>.'
+      : "Use the email that's on your household list, or open the invite link you were sent."}</p>
     <label>Email<input type="email" id="auth-email" autocomplete="email" required></label>
     <label>Password<input type="password" id="auth-pass" autocomplete="current-password" minlength="6" required></label>
     <div class="row"><button class="btn primary" type="submit" data-mode="in">Sign in</button>
@@ -459,14 +475,49 @@ function viewAuth() {
   </form>`;
 }
 function viewNotMember() {
-  return `<div class="empty"><h2>This account isn't on the household list</h2>
-    <p class="muted">Signed in as ${esc(S.user && S.user.email)}. Add this email to <b>household_members</b> in Supabase (see SETUP.md), then reload.</p>
+  if (joinCode()) return viewJoin();
+  return `<div class="empty"><h2>You're not in Pantry Prep yet</h2>
+    <p class="muted">Signed in as ${esc(S.user && S.user.email)}. Ask someone who uses Pantry Prep for their invite link, open it on this device, and you'll be let in.</p>
     <p><button class="btn" data-act="signout">Sign out</button></p></div>`;
 }
+
+/* An invited newcomer chooses: start their own pantry, or join a household that's already here. */
+function viewJoin() {
+  const j = S.join || {};
+  const houses = j.houses || [];
+  const mode = j.mode || 'new';
+  return `<form class="auth" id="join-form">
+    <h1>Welcome to Pantry Prep</h1>
+    <p class="muted" style="margin:0">Signed in as ${esc(S.user && S.user.email)}. Choose where your recipes and weekly grocery list will live. Everyone can see and cook from each other's recipes.</p>
+    <label class="choice"><input type="radio" name="jmode" value="new" ${mode === 'new' ? 'checked' : ''}> Start my own pantry</label>
+    <label ${mode === 'new' ? '' : 'hidden'}>Name it<input type="text" id="join-label" maxlength="40" placeholder="e.g. The Smith Kitchen" value="${esc(j.label || '')}"></label>
+    ${houses.length ? `<label class="choice"><input type="radio" name="jmode" value="existing" ${mode === 'existing' ? 'checked' : ''}> Join a household that's already here (share its weekly list)</label>
+      <label ${mode === 'existing' ? '' : 'hidden'}>Household<select id="join-house">${houses.map(h => `<option value="${esc(h.household)}">${esc(h.label)}</option>`).join('')}</select></label>` : ''}
+    <div class="row"><button class="btn primary" type="submit" ${j.busy ? 'disabled' : ''}>Join Pantry Prep</button><button class="btn ghost" type="button" data-act="signout">Sign out</button></div>
+    ${j.err ? `<div class="status err" role="alert">${esc(j.err)}</div>` : ''}
+  </form>`;
+}
+
 function viewAccount() {
+  const inv = S.invite;
+  const link = inv && inv.code ? `${location.origin}${location.pathname}?join=${inv.code}` : '';
+  const invite = !link ? '' : `<section class="auth" style="margin:0 auto">
+      <h2 style="font-size:20px">Invite people</h2>
+      <p class="muted" style="margin:0">Send this link to anyone you want to add. When they open it and create an account, they're in. No need to add their email anywhere.</p>
+      <input type="text" id="invite-link" value="${esc(link)}" readonly>
+      <div class="row"><button class="btn primary" data-act="copy-invite">Copy invite link</button></div>
+      ${S.confirm === 'new-invite'
+        ? `<span class="confirm">The current link will stop working for new people. Everyone already in keeps access. <button class="btn sm danger" data-act="new-invite">Make a new link</button><button class="btn sm ghost" data-act="cancel-confirm">Cancel</button></span>`
+        : `<button class="linkish" style="justify-self:start" data-act="ask-new-invite">Stop this link and make a new one</button>`}
+    </section>`;
   return `<div class="empty"><h2>Account</h2><p class="muted">Signed in as ${esc(S.user && S.user.email)}</p>
     <p><button class="btn" data-act="reload">Reload app</button> <button class="btn" data-act="signout">Sign out</button> <a class="btn ghost" href="#recipes">Back</a></p>
-    <p class="note">Version ${APP_VERSION}</p></div>`;
+    <p class="note">Version ${APP_VERSION}</p></div>${invite}`;
+}
+async function loadInvite() {
+  if (Store !== Remote || !S.user) return;
+  const code = await Remote.getInviteCode();
+  S.invite = code ? { code } : null; render();
 }
 
 function viewImporter() {
@@ -789,6 +840,18 @@ document.addEventListener('click', async e => {
     case 'cancel-edit-recipe': S.editRecipe = false; render(); break;
     case 'signout': await Store.signOut(); navTo('recipes'); break;
     case 'reload': toast('Reloading…'); checkForUpdate(true); break;
+    case 'copy-invite': {
+      const input = $('#invite-link');
+      try { await navigator.clipboard.writeText(input.value); toast('Invite link copied'); }
+      catch { input.focus(); input.select(); toast('Select the link and copy it'); }
+      break;
+    }
+    case 'ask-new-invite': S.confirm = 'new-invite'; render(); break;
+    case 'new-invite':
+      S.confirm = null;
+      try { const code = await Remote.resetInviteCode(); S.invite = { code }; toast('New invite link made. The old one no longer works.'); }
+      catch { toast("Couldn't make a new link. Try again."); }
+      render(); break;
     case 'copy': {
       const txt = listAsText();
       try { await navigator.clipboard.writeText(txt); toast('List copied'); }
@@ -800,6 +863,10 @@ document.addEventListener('click', async e => {
 
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.name === 'jmode') {
+    S.join = { ...(S.join || {}), mode: el.value, label: ($('#join-label') || {}).value || (S.join || {}).label };
+    render(); return;
+  }
   if (el.id === 'pantry-select') {
     try {
       const [p, c] = JSON.parse(el.value);
@@ -830,6 +897,24 @@ document.addEventListener('submit', async e => {
       } else { await Store.signIn(email, pass); S.authMsg = null; }
     } catch (err) { S.authMsg = { bad: true, text: (err && err.message) || 'Something went wrong.' }; }
     render();
+  } else if (f.id === 'join-form') {
+    const mode = (f.querySelector('input[name=jmode]:checked') || {}).value || 'new';
+    const label = ($('#join-label') || {}).value || '';
+    const house = mode === 'existing' ? ($('#join-house') || {}).value || '' : '';
+    if (mode === 'new' && !label.trim()) { S.join = { ...S.join, mode, err: 'Give your pantry a name, like "The Smith Kitchen".' }; render(); return; }
+    S.join = { ...S.join, mode, label, busy: true, err: '' }; render();
+    try {
+      await Remote.joinWithInvite(joinCode(), house, label.trim());
+      writePref('join', ''); S.join = null; S.ready = false; render();
+      await startSession(); toast("You're in! Welcome to Pantry Prep.");
+    } catch (err) {
+      const msg = String((err && err.message) || '');
+      S.join = { ...S.join, busy: false, err: /bad_code/.test(msg)
+        ? 'This invite link has expired. Ask for a new one and open it on this device.'
+        : "Couldn't join just now. Check your connection and try again." };
+      if (/bad_code/.test(msg)) writePref('join', '');
+      render();
+    }
   } else if (f.id === 'add-form') {
     const url = safeUrl($('#add-url').value.trim());
     if (!url) { S.import = { err: "That doesn't look like a web link. It should start with https://" }; render(); return; }
@@ -909,7 +994,7 @@ function route(given) {
   const h = typeof given === 'string' ? given : location.hash.replace(/^#/, '');
   S.confirm = null; S.editing = null; S.matching = null; S.editRecipe = false; S.settingCat = false;
   if (h === 'list') S.view = 'list';
-  else if (h === 'account') S.view = 'account';
+  else if (h === 'account') { S.view = 'account'; loadInvite(); }
   else if (h.startsWith('r-')) { S.view = 'recipe'; S.openId = h.slice(2); }
   else S.view = 'recipes';
   render(); window.scrollTo(0, 0);
@@ -944,6 +1029,11 @@ async function refresh() {
 }
 async function startSession() {
   S.notMember = !(await Store.isMember());
+  if (S.notMember && joinCode() && Store === Remote) {
+    S.join = { houses: await Remote.householdsForInvite(joinCode()) };
+    S.ready = true; render(); return;           // the join screen takes it from here
+  }
+  if (!S.notMember && joinCode()) writePref('join', '');   // already in: the invite isn't needed
   await refresh();
   S.ready = true; render();
   if (Store === Remote) Remote.subscribe(refresh);
