@@ -4,7 +4,7 @@
 
 const CFG = window.RECIPE_BOX_CONFIG || {};
 /* Bump together with version.json and the ?v= numbers in index.html on every publish. */
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 const CACHE_KEY = 'recipe-box-cache-v1';
 const LOCAL_KEY = 'recipe-box-local-v1';
 
@@ -162,6 +162,7 @@ let Store = Local;
 const STORES = {
   heb:     { name: 'H-E-B',      factor: 1,    search: 'https://www.heb.com/search?q=' },
   walmart: { name: 'Walmart',    factor: 0.93, search: 'https://www.walmart.com/search?q=' },
+  kroger:  { name: 'Kroger',     factor: 1.03, search: 'https://www.kroger.com/search?query=' },
   sams:    { name: "Sam's Club", factor: 0.85, search: 'https://www.samsclub.com/s/' },
   costco:  { name: 'Costco',     factor: 0.85, search: 'https://www.costco.com/CatalogSearch?keyword=' },
 };
@@ -609,7 +610,7 @@ function viewList() {
   const need = items.filter(i => !i.have), have = items.filter(i => i.have);
   const total = need.reduce((s, i) => s + i.cost, 0);
   const left = need.filter(i => !i.got).length;
-  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap “Add to week” on what you want to cook. The list adds up every ingredient, grouped by aisle, with price estimates for H-E-B, Walmart, Sam's Club or Costco.</p></div>${extrasBox()}`;
+  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap “Add to week” on what you want to cook. The list adds up every ingredient, grouped by aisle, with price estimates for H-E-B, Walmart, Kroger, Sam's Club or Costco.</p></div>${extrasBox()}`;
   const chips = sel.map(([id, v]) => { const r = recipeById(id); const m = Number(v && v.mult) || 1; return `<span class="chip"><a href="#r-${esc(id)}">${esc(r.title)}</a>
       <span class="mult"><button data-act="mult" data-id="${esc(id)}" data-d="-1" aria-label="Fewer batches">−</button><span class="num">×${m}</span><button data-act="mult" data-id="${esc(id)}" data-d="1" aria-label="More batches">+</button></span>
       <button class="x" data-act="toggle-week" data-id="${esc(id)}" aria-label="Remove ${esc(r.title)}">✕</button></span>`; }).join('');
