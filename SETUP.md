@@ -96,6 +96,10 @@ Everyone on the member list shares the recipes and prices. Each **household** ha
 3. Send them the link. They tap **Create account** with that exact email.
 4. Run `supabase-update-3-pantries.sql` once. It names each household's **pantry** (its recipe collection), shown on the left of the Recipes page. Each household can rename its own pantry in the app.
 
+## Invite links (no emails needed)
+
+Run `supabase-update-4-invites.sql` once. After that, your household (the original "home" one) has an **Invite people** link on the Account page. Anyone who opens that link and creates an account can join: they either start their own pantry or join an existing household's weekly list. Everyone shares recipes and can edit them. **Stop this link and make a new one** turns off the old link for new people; people already in keep access.
+
 ## Optional: Gemini for TikToks and tricky sites (free)
 
 With a free Google Gemini key, the link reader can turn a TikTok's caption **and what's said in the video** (TikTok's auto-generated captions) into a clean recipe. It also reads recipe sites that don't publish recipe data.
