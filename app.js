@@ -13,7 +13,10 @@ const S = {
   import: null, editing: null, confirm: null, matching: null, editRecipe: false,
   showHave: false, pasteOpen: false,
   households: {}, pantry: readPref('pantry') || 'all', renaming: false,
+  category: null,          // null = every category, NONE = uncategorized, else a category name
+  settingCat: false, renamingCat: false,
 };
+const NONE = '__none__';
 function readPref(k) { try { return localStorage.getItem('recipe-box-' + k); } catch { return null; } }
 function writePref(k, v) { try { localStorage.setItem('recipe-box-' + k, v); } catch {} }
 const doneSteps = new Set();
@@ -193,6 +196,24 @@ function pantries() {
     .map(id => ({ id, label: pantryLabel(id), mine: id === mine, count: S.recipes.filter(r => recipeHousehold(r) === id).length }));
 }
 
+/* Categories inside a pantry (BBQ, Sandwiches…): one per recipe, made up by you. */
+const recipeCategory = r => String(r.category || '').trim();
+const inPantryScope = (r, pantry) => pantry === 'all' || recipeHousehold(r) === pantry;
+function categoriesFor(pantry) {
+  const counts = new Map(); let none = 0;
+  for (const r of S.recipes) {
+    if (!inPantryScope(r, pantry)) continue;
+    const c = recipeCategory(r);
+    if (!c) { none++; continue; }
+    const k = c.toLowerCase(), cur = counts.get(k);
+    counts.set(k, { name: cur ? cur.name : c, count: (cur ? cur.count : 0) + 1 });   // "bbq" and "BBQ" are one category
+  }
+  return { cats: [...counts.values()].sort((a, b) => a.name.localeCompare(b.name)), none };
+}
+// Adding a recipe while looking at one of your categories files it there.
+const newRecipeCategory = () => (S.category && S.category !== NONE && (S.pantry === myHousehold() || S.pantry === 'all') ? S.category : '');
+const catMatches = r => S.category == null || (S.category === NONE ? !recipeCategory(r) : recipeCategory(r).toLowerCase() === S.category.toLowerCase());
+
 const recipeCost = r => (r.ingredients || []).reduce((s, i) => s + resolve(i).cost, 0);
 const recipeById = id => S.recipes.find(r => r.id === id);
 
@@ -266,7 +287,7 @@ async function importFromUrl(url) {
       title: d.title || 'Untitled recipe', sourceUrl: url, summary: d.summary || '', servings: d.servings || '',
       totalMinutes: d.totalMinutes || 0, image: safeUrl(d.image),
       ingredients: d.ingredients.map(raw => ({ raw })), steps: groupsSeen.map(s => ({ group: s.group || '', text: s.text })),
-      addedBy: S.user ? S.user.email : '', household: myHousehold(),
+      addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory(),
     };
     const id = await Store.addRecipe(data);
     S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
@@ -286,7 +307,7 @@ async function importFromText(text) {
   const t = parseRecipeText(text);
   if (!t.ingredients.length) { S.import = { err: "Couldn't spot the ingredients. Make sure the text includes an “Ingredients” heading or lines that start with amounts." }; render(); return; }
   const data = { title: t.title, sourceUrl: '', summary: '', servings: '', totalMinutes: 0, image: '',
-    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), addedBy: S.user ? S.user.email : '', household: myHousehold() };
+    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory() };
   try {
     const id = await safely(Store.addRecipe(data));
     S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
@@ -361,10 +382,14 @@ function viewRecipes() {
   const q = S.q.trim().toLowerCase();
   const ps = pantries();
   if (S.pantry !== 'all' && !ps.some(p => p.id === S.pantry)) S.pantry = 'all';
-  const inPantry = S.recipes.filter(r => S.pantry === 'all' || recipeHousehold(r) === S.pantry);
+  const { cats, none } = categoriesFor(S.pantry);
+  if (S.category != null && S.category !== NONE && !cats.some(c => c.name.toLowerCase() === S.category.toLowerCase())) S.category = null;
+  if (S.category === NONE && !none) S.category = null;
+  const inPantry = S.recipes.filter(r => inPantryScope(r, S.pantry) && catMatches(r));
   const list = inPantry.filter(r => !q || (r.title + ' ' + (r.ingredients || []).map(i => i.raw).join(' ')).toLowerCase().includes(q));
   const cur = ps.find(p => p.id === S.pantry);
-  const heading = cur ? `${cur.label}${cur.mine ? '' : "'s pantry"}` : 'All recipes';
+  const heading = (cur ? `${cur.label}${cur.mine ? '' : "'s pantry"}` : 'All recipes')
+    + (S.category == null ? '' : ` › ${S.category === NONE ? 'No category' : S.category}`);
   let body;
   if (!S.recipes.length) body = `<div class="empty"><h2>No recipes yet</h2><p class="muted">Paste a link from a recipe site above. The app keeps just the ingredients and steps and estimates what they cost at H-E-B.</p></div>`;
   else if (!inPantry.length) body = `<div class="empty"><h2>No recipes here yet</h2><p class="muted">${cur && cur.mine ? 'Recipes you add go in your pantry.' : `When ${esc(cur ? cur.label : 'they')} add recipes, they show up here.`}</p></div>`;
@@ -375,13 +400,15 @@ function viewRecipes() {
       ${viewImporter()}
       <div class="toolbar"><h2 class="pantry-title">${esc(heading)}</h2>
         ${inPantry.length > 3 ? `<input type="text" id="search" placeholder="Search recipes or ingredients" value="${esc(S.q)}" autocomplete="off">` : ''}</div>
+      ${viewRenameCategory()}
+      ${!cats.length && S.recipes.length ? `<p class="note">Sort recipes into categories like BBQ or Sandwiches: open a recipe and tap “Add a category”.</p>` : ''}
       ${body}
     </div></div>`;
 }
 
 function viewPantries(ps) {
-  const item = (id, label, count, extra = '') => `<button class="pantry ${S.pantry === id ? 'on' : ''}" data-act="pantry" data-id="${esc(id)}" aria-pressed="${S.pantry === id}">
-      <span>${esc(label)}${extra}</span><span class="num muted">${count}</span></button>`;
+  const item = (id, label, count, extra = '') => `<button class="pantry ${S.pantry === id && S.category == null ? 'on' : ''}" data-act="pantry" data-id="${esc(id)}" aria-pressed="${S.pantry === id}">
+      <span>${esc(label)}${extra}</span><span class="num muted">${count}</span></button>${S.pantry === id ? viewCategories() : ''}`;
   const mine = ps.find(p => p.mine);
   const rename = S.renaming && mine
     ? `<form id="rename-form" class="rename"><input type="text" id="rename-input" value="${esc(mine.label)}" maxlength="40" aria-label="Pantry name"><button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-rename">Cancel</button></form>`
@@ -394,6 +421,27 @@ function viewPantries(ps) {
     </div>
     ${rename || (mine ? `<button class="linkish rename-link" data-act="rename-pantry">Rename ${esc(mine.label)}</button>` : '')}
   </aside>`;
+}
+
+function viewCategories() {
+  const { cats, none } = categoriesFor(S.pantry);
+  if (!cats.length) return '';
+  const sub = (val, label, count) => {
+    const on = val === S.category;
+    return `<button class="pantry sub ${on ? 'on' : ''}" data-act="category" data-cat="${esc(val)}" aria-pressed="${on}"><span>${esc(label)}</span><span class="num muted">${count}</span></button>`;
+  };
+  return `<div class="subs" role="group" aria-label="Categories">
+    ${cats.map(c => sub(c.name, c.name, c.count)).join('')}
+    ${none ? sub(NONE, 'No category', none) : ''}
+  </div>`;
+}
+
+function viewRenameCategory() {
+  if (!S.category || S.category === NONE) return '';
+  if (S.renamingCat) return `<form id="cat-rename-form" class="catline"><input type="text" id="cat-rename-input" value="${esc(S.category)}" maxlength="40" aria-label="Category name">
+      <button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-rename-cat">Cancel</button>
+      <span class="note">Leave it blank to take these recipes out of the category.</span></form>`;
+  return `<button class="linkish" data-act="rename-cat">Rename category</button>`;
 }
 
 function card(r) {
@@ -444,6 +492,7 @@ function viewRecipe() {
       <div class="meta">${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}
         ${r.sourceUrl ? `<span><a href="${esc(safeUrl(r.sourceUrl))}" target="_blank" rel="noopener">Original on ${esc(host(r.sourceUrl))}</a></span>` : ''}
         <span class="num">About ${money(recipeCost(r))} at H-E-B <span class="est">estimate</span></span></div>
+      ${viewSetCategory(r)}
       <div class="detail-actions">
         <button class="btn ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : "Add to this week's list"}</button>
         <button class="btn ghost" data-act="edit-recipe">Edit</button>
@@ -456,6 +505,22 @@ function viewRecipe() {
         <p class="note" style="margin-top:8px">Tap what's after “Buy” to change which grocery item a line counts as.</p></section>
       <section class="panel"><h2>Steps <small>tap a step to cross it off</small></h2><ol class="steps">${steps}</ol></section>
     </div>`;
+}
+
+function viewSetCategory(r) {
+  const cat = recipeCategory(r);
+  const where = `${pantryLabel(recipeHousehold(r))}`;
+  if (!S.settingCat) {
+    return `<div class="catline">${cat ? `<span class="tag">${esc(where)} › ${esc(cat)}</span>` : `<span class="muted small">${esc(where)} · no category</span>`}
+      <button class="linkish" data-act="set-cat">${cat ? 'Change category' : 'Add a category'}</button></div>`;
+  }
+  const existing = categoriesFor(recipeHousehold(r)).cats.map(c => c.name);
+  return `<form class="catline" id="cat-form">
+      <input type="text" id="cat-input" value="${esc(cat)}" placeholder="e.g. BBQ, Sandwiches, Soups" maxlength="40" list="cat-names" aria-label="Category">
+      <datalist id="cat-names">${existing.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      <button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-set-cat">Cancel</button>
+    </form>
+    ${existing.length ? `<div class="catline small">${existing.map(c => `<button type="button" class="chipbtn" data-act="pick-cat" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}`;
 }
 
 function viewEditRecipe(r) {
@@ -581,7 +646,13 @@ document.addEventListener('click', async e => {
       navTo('recipes'); break;
     case 'new-week': S.confirm = null; changeList(l => { l.recipes = {}; l.checked = {}; l.have = {}; l.qty = {}; l.extras = []; }); toast('List cleared for a new week'); break;
     case 'toggle-have-list': S.showHave = !S.showHave; render(); break;
-    case 'pantry': S.pantry = id; S.q = ''; writePref('pantry', id); render(); break;
+    case 'pantry': S.pantry = id; S.category = null; S.renamingCat = false; S.q = ''; writePref('pantry', id); render(); break;
+    case 'category': S.category = S.category === el.dataset.cat ? null : el.dataset.cat; S.renamingCat = false; render(); break;
+    case 'rename-cat': S.renamingCat = true; render(); setTimeout(() => { const i = $('#cat-rename-input'); if (i) { i.focus(); i.select(); } }, 0); break;
+    case 'cancel-rename-cat': S.renamingCat = false; render(); break;
+    case 'set-cat': S.settingCat = true; render(); setTimeout(() => { const i = $('#cat-input'); if (i) i.focus(); }, 0); break;
+    case 'cancel-set-cat': S.settingCat = false; render(); break;
+    case 'pick-cat': { const r = recipeById(S.openId); if (r) { S.settingCat = false; const d = recipeData(r); d.category = el.dataset.cat; await saveRecipeData(r.id, d); } break; }
     case 'rename-pantry': S.renaming = true; render(); setTimeout(() => { const i = $('#rename-input'); if (i) { i.focus(); i.select(); } }, 0); break;
     case 'cancel-rename': S.renaming = false; render(); break;
     case 'step': { const k = S.openId + ':' + el.dataset.ix; doneSteps.has(k) ? doneSteps.delete(k) : doneSteps.add(k); el.classList.toggle('done'); break; }
@@ -639,6 +710,21 @@ document.addEventListener('submit', async e => {
       safely(Store.setPrice(k, data), 'Price saved for every recipe').catch(() => {});
     }
     S.editing = null; render();
+  } else if (f.id === 'cat-form') {
+    const r = recipeById(S.openId); if (!r) return;
+    let name = $('#cat-input').value.trim().slice(0, 40);
+    // Reuse an existing category's spelling ("bbq" → "BBQ").
+    const same = categoriesFor(recipeHousehold(r)).cats.find(c => c.name.toLowerCase() === name.toLowerCase());
+    if (same) name = same.name;
+    else name = name.charAt(0).toUpperCase() + name.slice(1);
+    S.settingCat = false;
+    const d = recipeData(r); d.category = name; await saveRecipeData(r.id, d);
+  } else if (f.id === 'cat-rename-form') {
+    const from = S.category, to = $('#cat-rename-input').value.trim().slice(0, 40);
+    S.renamingCat = false;
+    const targets = S.recipes.filter(r => inPantryScope(r, S.pantry) && recipeCategory(r).toLowerCase() === String(from).toLowerCase());
+    for (const r of targets) { const d = recipeData(r); d.category = to; await saveRecipeData(r.id, d, true); }
+    S.category = to || null; render(); toast(to ? `Renamed to ${to}` : 'Category removed');
   } else if (f.id === 'rename-form') {
     const label = $('#rename-input').value.trim().slice(0, 40);
     S.renaming = false;
@@ -672,8 +758,8 @@ document.addEventListener('submit', async e => {
   }
 });
 function recipeData(r) { const { id, createdAt, ...rest } = r; return clone(rest); }
-async function saveRecipeData(id, data) {
-  try { await safely(Store.updateRecipe(id, data), 'Saved'); } catch { return; }
+async function saveRecipeData(id, data, quiet) {
+  try { await safely(Store.updateRecipe(id, data), quiet ? null : 'Saved'); } catch { return; }
   S.recipes = S.recipes.map(r => r.id === id ? { id, ...data, createdAt: r.createdAt } : r);
   resolveCache.clear(); cacheSave(); render();
 }
@@ -682,7 +768,7 @@ async function saveRecipeData(id, data) {
 function navTo(h) { try { if (location.hash.slice(1) !== h) history.pushState(null, '', '#' + h); } catch {} route(h); }
 function route(given) {
   const h = typeof given === 'string' ? given : location.hash.replace(/^#/, '');
-  S.confirm = null; S.editing = null; S.matching = null; S.editRecipe = false;
+  S.confirm = null; S.editing = null; S.matching = null; S.editRecipe = false; S.settingCat = false;
   if (h === 'list') S.view = 'list';
   else if (h === 'account') S.view = 'account';
   else if (h.startsWith('r-')) { S.view = 'recipe'; S.openId = h.slice(2); }

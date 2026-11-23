@@ -67,6 +67,7 @@ details[open] > summary { margin-bottom: 8px; }
 /* Pantries: a left column on tablets and computers, a scrolling row of buttons on phones. */
 .with-side { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
 .side-main { display: grid; gap: 20px; min-width: 0; }
+.side-main > .linkish { justify-self: start; margin-top: -12px; }
 .pantries { position: sticky; top: calc(70px + env(safe-area-inset-top, 0px)); display: grid; gap: 8px; }
 .pantries h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-family: var(--font-body); font-weight: 600; padding: 0 10px; }
 .pantry-list { display: grid; gap: 2px; }
@@ -79,6 +80,12 @@ details[open] > summary { margin-bottom: 8px; }
 .rename { display: grid; gap: 6px; padding: 0 4px; }
 .rename input { width: 100%; }
 .rename .btn { justify-self: start; }
+.subs { display: grid; gap: 1px; margin: 2px 0 6px 12px; padding-left: 8px; border-left: 2px solid var(--line); }
+.pantry.sub { padding: 5px 10px; font-weight: 400; font-size: 14px; }
+.catline { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.catline input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+.chipbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 13px; }
+.chipbtn:hover { border-color: var(--accent); }
 .pantry-title { font-size: 22px; margin-right: auto; }
 .tag { background: var(--sunk); color: var(--fg); border-radius: 4px; padding: 0 6px; }
 @media (max-width: 759px) {
@@ -90,6 +97,10 @@ details[open] > summary { margin-bottom: 8px; }
   .pantry.on { border-color: var(--accent); }
   .rename-link { margin-left: 2px; }
   .rename { grid-template-columns: minmax(0, 1fr) auto auto; padding: 0; }
+  .pantry-list { flex-wrap: nowrap; }
+  .subs { display: contents; }
+  .pantry.sub { border-style: dashed; font-size: 13.5px; padding: 5px 11px; }
+  .pantry.sub.on { border-style: solid; }
 }
 
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
