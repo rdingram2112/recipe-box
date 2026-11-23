@@ -173,6 +173,8 @@ details[open] > summary { margin-bottom: 8px; }
 .steps .st.done { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
 .steps .st:hover { background: var(--sunk); }
 .confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--sunk); padding: 8px 10px; border-radius: 8px; font-size: 14px; }
+.transcript summary { font-weight: 600; color: var(--fg); font-size: 15px; }
+.transcript p { margin: 0; max-width: 70ch; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .editform { display: grid; gap: 12px; }
 .editform label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .editform textarea { min-height: 200px; font-size: 15px; }

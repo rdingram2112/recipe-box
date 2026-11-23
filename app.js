@@ -4,7 +4,7 @@
 
 const CFG = window.RECIPE_BOX_CONFIG || {};
 /* Bump together with version.json and the ?v= numbers in index.html on every publish. */
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 const CACHE_KEY = 'recipe-box-cache-v1';
 const LOCAL_KEY = 'recipe-box-local-v1';
 
@@ -231,7 +231,7 @@ function pantries() {
     .map(id => ({ id, label: pantryLabel(id), mine: id === mine, count: S.recipes.filter(r => recipeHousehold(r) === id).length }));
 }
 
-/* Categories inside a pantry (BBQ, Sandwichesâ€¦): one per recipe, made up by you. */
+/* Categories inside a pantry (BBQ, Sandwiches…): one per recipe, made up by you. */
 const recipeCategory = r => String(r.category || '').trim();
 const inPantryScope = (r, pantry) => pantry === 'all' || recipeHousehold(r) === pantry;
 function categoriesFor(pantry) {
@@ -313,7 +313,7 @@ async function safely(p, okMsg) {
 async function importFromUrl(url) {
   const existing = S.recipes.find(r => r.sourceUrl && r.sourceUrl === url);
   if (existing) { navTo('r-' + existing.id); toast('You already have this one'); return; }
-  S.import = { busy: true, msg: `Reading ${host(url)}â€¦` }; render();
+  S.import = { busy: true, msg: `Reading ${host(url)}…` }; render();
   try {
     const d = await Store.importUrl(url);
     if (d && d.kind === 'tiktok') { await importFromCaption(url, d); return; }
@@ -322,18 +322,19 @@ async function importFromUrl(url) {
     const data = {
       title: d.title || 'Untitled recipe', sourceUrl: url, summary: d.summary || '', servings: d.servings || '',
       totalMinutes: d.totalMinutes || 0, image: safeUrl(d.image),
-      ingredients: d.ingredients.map(raw => ({ raw })), steps: groupsSeen.map(s => ({ group: s.group || '', text: s.text })),
+      ingredients: d.ingredients.map(raw => ({ raw })), steps: groupsSeen.map(s => ({ group: s.group || '', text: s.text })), ...(d.by === 'ai' ? { by: 'ai' } : {}),
       addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory(),
     };
     const id = await Store.addRecipe(data);
     S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
-    S.import = null; cacheSave(); navTo('r-' + id); toast(`Added â€œ${data.title}â€`);
+    S.import = null; cacheSave(); navTo('r-' + id); toast(`Added “${data.title}”`);
   } catch (e) {
     const c = e && e.code;
     S.import = { err: c === 'needs_setup' ? "Adding from a link starts working once the app is connected to Supabase (see SETUP.md). For now, paste the recipe text below."
       : c === 'no_recipe' ? `Couldn't find a recipe on that page. Open it, copy the recipe text, and paste it below.`
       : c === 'fetch_failed' ? `${host(url)} wouldn't let the app read the page. Copy the recipe text from the site and paste it below.`
       : c === 'bad_url' ? "That doesn't look like a web link. It should start with https://"
+      : c === 'ai_busy' ? "This site needed Gemini to read it, and Gemini's free limit is used up for now. Try again later, or paste the recipe text below."
       : c === 'no_caption' ? "Couldn't read that TikTok's caption. In TikTok, tap the caption to expand it, copy it, and paste it below."
       : "Couldn't import that link. Check your connection, or paste the recipe text below.", };
     S.pasteOpen = true;
@@ -342,28 +343,46 @@ async function importFromUrl(url) {
 }
 /* A TikTok link: the caption is the recipe. If it has no ingredients, hand it to the paste box to finish. */
 async function importFromCaption(url, d) {
-  const t = parseCaption(d.caption);
   const src = safeUrl(d.sourceUrl) || url;
+  const transcript = String(d.transcript || '').slice(0, 30000);
+  // Best case: Gemini wrote the recipe from the caption and what's said in the video.
+  if (d.ai && Array.isArray(d.ai.ingredients) && d.ai.ingredients.length) {
+    const a = d.ai;
+    const data = {
+      title: a.title || parseCaption(d.caption).title || 'TikTok recipe', sourceUrl: src, summary: '', servings: a.servings || '',
+      totalMinutes: Number(a.totalMinutes) || 0, image: '', video: 'tiktok', author: d.author || '', by: 'ai', transcript,
+      ingredients: a.ingredients.map(raw => ({ raw: String(raw) })), steps: (a.steps || []).map(text => ({ group: '', text: String(text) })),
+      addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory(),
+    };
+    const id = await Store.addRecipe(data);
+    S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
+    S.import = null; cacheSave(); navTo('r-' + id); toast(`Added “${data.title}”`);
+    return;
+  }
+  const aiNote = d.aiError === 'rate_limited' ? ' (Gemini is busy right now, so the caption was used on its own.)'
+    : d.aiError === 'bad_key' ? ' (The Gemini key was refused; check it in Supabase.)' : '';
+  if (aiNote) console.warn('Gemini:', d.aiError);
+  const t = parseCaption(d.caption);
   if (!t.ingredients.length) {
     S.pasteText = (t.title ? t.title + '\n\n' : '') + 'Ingredients\n\n' + (t.steps.length ? 'Instructions\n' + t.steps.join('\n') : '');
     S.pasteSource = src; S.pasteOpen = true;
-    S.import = { err: "This TikTok's caption doesn't list the ingredients (they may be in the video or comments). Add them under â€œIngredientsâ€ below, one per line, then tap Add from text." };
+    S.import = { err: "Couldn't find the ingredients in this TikTok's caption" + (transcript ? '' : ' or spoken captions') + ". Add them under “Ingredients” below, one per line, then tap Add from text." + aiNote };
     render(); return;
   }
   const data = {
     title: t.title || (d.author ? `TikTok recipe from @${d.author}` : 'TikTok recipe'), sourceUrl: src, summary: '', servings: '', totalMinutes: 0, image: '',
-    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), video: 'tiktok', author: d.author || '',
+    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), video: 'tiktok', author: d.author || '', transcript,
     addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory(),
   };
   const id = await Store.addRecipe(data);
   S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
   S.import = null; cacheSave(); navTo('r-' + id);
-  toast(t.steps.length ? `Added â€œ${data.title}â€` : 'Added. The caption had no steps, so watch the video for those.');
+  toast((t.steps.length ? `Added “${data.title}”` : 'Added. The caption had no steps, so watch the video for those.') + aiNote);
 }
 
 async function importFromText(text) {
   const t = parseRecipeText(text);
-  if (!t.ingredients.length) { S.import = { err: "Couldn't spot the ingredients. Make sure the text includes an â€œIngredientsâ€ heading or lines that start with amounts." }; render(); return; }
+  if (!t.ingredients.length) { S.import = { err: "Couldn't spot the ingredients. Make sure the text includes an “Ingredients” heading or lines that start with amounts." }; render(); return; }
   const src = S.pasteSource || ''; S.pasteSource = ''; S.pasteText = '';
   const data = { title: t.title, sourceUrl: src, summary: '', servings: '', totalMinutes: 0, image: '', ...(/tiktok\.com/.test(src) ? { video: 'tiktok' } : {}),
     ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), addedBy: S.user ? S.user.email : '', household: myHousehold(), category: newRecipeCategory() };
@@ -387,7 +406,7 @@ function render() {
   renderPicker();
   const app = $('#app');
   const f = document.activeElement, focusId = f && f.id, sel = f && f.selectionStart;
-  if (!S.ready) app.innerHTML = `<div class="empty"><h2>Opening Pantry Prepâ€¦</h2></div>`;
+  if (!S.ready) app.innerHTML = `<div class="empty"><h2>Opening Pantry Prep…</h2></div>`;
   else if (Store === Remote && !S.user) app.innerHTML = viewAuth();
   else if (S.notMember) app.innerHTML = viewNotMember();
   else if (S.view === 'list') app.innerHTML = viewList();
@@ -423,7 +442,7 @@ function renderPicker() {
   const cur = ps.find(p => p.id === S.pantry);
   const top = cur ? cur.label : 'Everyone';
   const main = S.category == null ? 'All recipes' : S.category === NONE ? 'No category' : S.category;
-  box.innerHTML = `<span class="picker-label"><span class="picker-text"><small>${esc(top)}</small><span>${esc(main)}</span></span><span aria-hidden="true">â–¾</span></span>
+  box.innerHTML = `<span class="picker-label"><span class="picker-text"><small>${esc(top)}</small><span>${esc(main)}</span></span><span aria-hidden="true">▾</span></span>
     <select id="pantry-select" aria-label="Pantry and category">${html}</select>`;
 }
 
@@ -480,11 +499,11 @@ function viewRecipes() {
   const list = inPantry.filter(r => !q || (r.title + ' ' + (r.ingredients || []).map(i => i.raw).join(' ')).toLowerCase().includes(q));
   const cur = ps.find(p => p.id === S.pantry);
   const heading = (cur ? `${cur.label}${cur.mine ? '' : "'s pantry"}` : 'All recipes')
-    + (S.category == null ? '' : ` â€º ${S.category === NONE ? 'No category' : S.category}`);
+    + (S.category == null ? '' : ` › ${S.category === NONE ? 'No category' : S.category}`);
   let body;
   if (!S.recipes.length) body = `<div class="empty"><h2>No recipes yet</h2><p class="muted">Paste a link from a recipe site above. The app keeps just the ingredients and steps and estimates what they cost at H-E-B.</p></div>`;
   else if (!inPantry.length) body = `<div class="empty"><h2>No recipes here yet</h2><p class="muted">${cur && cur.mine ? 'Recipes you add go in your pantry.' : `When ${esc(cur ? cur.label : 'they')} add recipes, they show up here.`}</p></div>`;
-  else if (!list.length) body = `<div class="empty"><h2>Nothing matches â€œ${esc(S.q)}â€</h2><p class="muted">Try an ingredient or part of the name.</p></div>`;
+  else if (!list.length) body = `<div class="empty"><h2>Nothing matches “${esc(S.q)}”</h2><p class="muted">Try an ingredient or part of the name.</p></div>`;
   else body = `<div class="grid">${list.map(card).join('')}</div>`;
   return `<div class="with-side">${viewPantries(ps)}
     <div class="side-main">
@@ -492,7 +511,7 @@ function viewRecipes() {
       <div class="toolbar"><h2 class="pantry-title">${esc(heading)}</h2>
         ${inPantry.length > 3 ? `<input type="text" id="search" placeholder="Search recipes or ingredients" value="${esc(S.q)}" autocomplete="off">` : ''}</div>
       ${viewRenameCategory()}${viewRenamePantry(cur)}
-      ${!cats.length && S.recipes.length ? `<p class="note">Sort recipes into categories like BBQ or Sandwiches: open a recipe and tap â€œAdd a categoryâ€.</p>` : ''}
+      ${!cats.length && S.recipes.length ? `<p class="note">Sort recipes into categories like BBQ or Sandwiches: open a recipe and tap “Add a category”.</p>` : ''}
       ${body}
     </div></div>`;
 }
@@ -546,7 +565,7 @@ function card(r) {
       <h3><a href="#r-${esc(r.id)}">${esc(r.title)}</a></h3>
       <div class="meta">${S.pantry === 'all' && pantries().length > 1 ? `<span class="tag">${esc(pantryLabel(recipeHousehold(r)))}</span>` : ''}${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}${r.sourceUrl ? `<span>${esc(host(r.sourceUrl))}</span>` : ''}</div>
       <div class="foot"><span class="cost num">~${money(recipeCost(r))} <span class="muted small" style="font-weight:400">to make</span></span>
-        <button class="btn sm ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week âœ“' : 'Add to week'}</button></div>
+        <button class="btn sm ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : 'Add to week'}</button></div>
     </div>
   </article>`;
 }
@@ -579,15 +598,16 @@ function viewRecipe() {
   const confirming = S.confirm === 'delete:' + r.id;
   const img = safeUrl(r.image);
   return `<div class="detail-head">
-      <div><a href="#recipes" class="small">â† All recipes</a></div>
+      <div><a href="#recipes" class="small">← All recipes</a></div>
       ${img ? `<img class="hero-img" src="${esc(img)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
       <h1>${esc(r.title)}</h1>
       <div class="meta">${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}
         ${r.sourceUrl ? `<span><a href="${esc(safeUrl(r.sourceUrl))}" target="_blank" rel="noopener">${/tiktok\.com$/.test(host(r.sourceUrl)) ? `Watch on TikTok${r.author ? ` (@${esc(r.author)})` : ''}` : `Original on ${esc(host(r.sourceUrl))}`}</a></span>` : ''}
         <span class="num">About ${money(recipeCost(r))} at ${esc(storeName())} <span class="est">estimate</span></span></div>
       ${viewSetCategory(r)}
+      ${r.by === 'ai' ? `<p class="note">Written by Google's Gemini from ${r.video === 'tiktok' ? 'the video and its caption' : 'the page'}. Amounts marked “(about)” were guessed, so check them against ${r.video === 'tiktok' ? 'the video' : 'the original'}.</p>` : ''}
       <div class="detail-actions">
-        <button class="btn ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week âœ“' : "Add to this week's list"}</button>
+        <button class="btn ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : "Add to this week's list"}</button>
         <button class="btn ghost" data-act="edit-recipe">Edit</button>
         ${confirming ? `<span class="confirm">Delete this recipe for everyone? <button class="btn sm danger" data-act="delete" data-id="${esc(r.id)}">Delete</button><button class="btn sm ghost" data-act="cancel-confirm">Keep it</button></span>`
           : `<button class="btn ghost" data-act="ask-delete" data-id="${esc(r.id)}">Delete</button>`}
@@ -595,17 +615,18 @@ function viewRecipe() {
     </div>
     <div class="detail">
       <section class="panel"><h2>Ingredients <small>${(r.ingredients || []).length}</small></h2><ul class="ings">${ings}</ul>
-        <p class="note" style="margin-top:8px">Tap what's after â€œBuyâ€ to change which grocery item a line counts as.</p></section>
+        <p class="note" style="margin-top:8px">Tap what's after “Buy” to change which grocery item a line counts as.</p></section>
       <section class="panel"><h2>Steps <small>tap a step to cross it off</small></h2>${steps ? `<ol class="steps">${steps}</ol>`
         : `<p class="note">No written steps yet.${r.sourceUrl ? ` <a href="${esc(safeUrl(r.sourceUrl))}" target="_blank" rel="noopener">${/tiktok\.com$/.test(host(r.sourceUrl)) ? 'Watch the video' : 'See the original'}</a>, or` : ''} tap Edit to add them.</p>`}</section>
-    </div>`;
+    </div>
+    ${r.transcript ? `<details class="panel transcript"><summary>What the video says</summary><p>${esc(r.transcript)}</p></details>` : ''}`;
 }
 
 function viewSetCategory(r) {
   const cat = recipeCategory(r);
   const where = `${pantryLabel(recipeHousehold(r))}`;
   if (!S.settingCat) {
-    return `<div class="catline">${cat ? `<span class="tag">${esc(where)} â€º ${esc(cat)}</span>` : `<span class="muted small">${esc(where)} Â· no category</span>`}
+    return `<div class="catline">${cat ? `<span class="tag">${esc(where)} › ${esc(cat)}</span>` : `<span class="muted small">${esc(where)} · no category</span>`}
       <button class="linkish" data-act="set-cat">${cat ? 'Change category' : 'Add a category'}</button></div>`;
   }
   const existing = categoriesFor(recipeHousehold(r)).cats.map(c => c.name);
@@ -635,10 +656,10 @@ function viewList() {
   const need = items.filter(i => !i.have), have = items.filter(i => i.have);
   const total = need.reduce((s, i) => s + i.cost, 0);
   const left = need.filter(i => !i.got).length;
-  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap â€œAdd to weekâ€ on what you want to cook. The list adds up every ingredient, grouped by aisle, with price estimates for H-E-B, Walmart, Kroger, Sam's Club or Costco.</p></div>${extrasBox()}`;
+  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap “Add to week” on what you want to cook. The list adds up every ingredient, grouped by aisle, with price estimates for H-E-B, Walmart, Kroger, Sam's Club or Costco.</p></div>${extrasBox()}`;
   const chips = sel.map(([id, v]) => { const r = recipeById(id); const m = Number(v && v.mult) || 1; return `<span class="chip"><a href="#r-${esc(id)}">${esc(r.title)}</a>
-      <span class="mult"><button data-act="mult" data-id="${esc(id)}" data-d="-1" aria-label="Fewer batches">âˆ’</button><span class="num">Ã—${m}</span><button data-act="mult" data-id="${esc(id)}" data-d="1" aria-label="More batches">+</button></span>
-      <button class="x" data-act="toggle-week" data-id="${esc(id)}" aria-label="Remove ${esc(r.title)}">âœ•</button></span>`; }).join('');
+      <span class="mult"><button data-act="mult" data-id="${esc(id)}" data-d="-1" aria-label="Fewer batches">−</button><span class="num">×${m}</span><button data-act="mult" data-id="${esc(id)}" data-d="1" aria-label="More batches">+</button></span>
+      <button class="x" data-act="toggle-week" data-id="${esc(id)}" aria-label="Remove ${esc(r.title)}">✕</button></span>`; }).join('');
   const groups = AISLE_ORDER.map(a => [a, need.filter(i => i.aisle === a)]).filter(([, l]) => l.length);
   const unpriced = need.filter(i => !i.priced).length;
   const newWeek = S.confirm === 'newweek'
@@ -658,7 +679,7 @@ function viewList() {
       <div class="actions"><button class="btn" data-act="copy">Copy list</button>${newWeek}</div>
     </section>
     <div class="chips">${chips}</div>
-    ${unpriced ? `<p class="note">${unpriced} item${unpriced > 1 ? 's have' : ' has'} no price yet, so the total is low. Tap â€œadd priceâ€ to fill one in once; it's remembered.</p>` : ''}
+    ${unpriced ? `<p class="note">${unpriced} item${unpriced > 1 ? 's have' : ' has'} no price yet, so the total is low. Tap “add price” to fill one in once; it's remembered.</p>` : ''}
     ${groups.map(([a, l]) => `<section class="aisle"><h3>${esc(a)}</h3><div class="rows">${l.map(row).join('')}</div></section>`).join('')}
     ${extrasBox()}
     ${have.length ? `<section class="aisle"><h3>Already have at home (${have.length}) <button class="linkish" data-act="toggle-have-list">${S.showHave ? 'hide' : 'show'}</button></h3>
@@ -670,7 +691,7 @@ function viewList() {
 }
 
 function row(i) {
-  const qtyTxt = i.extra ? '' : i.byLb ? `â‰ˆ ${i.qty} lb` : `${i.qty} Ã— ${esc(i.size || 'each')}`;
+  const qtyTxt = i.extra ? '' : i.byLb ? `≈ ${i.qty} lb` : `${i.qty} × ${esc(i.size || 'each')}`;
   const forTxt = i.uses.size ? 'for ' + [...i.uses].join(', ') : '';
   const enc = encodeURIComponent(i.key);
   let edit = '';
@@ -681,7 +702,7 @@ function row(i) {
       <label>Sold<select id="pe-by"><option value="pk" ${(!e.by || e.by === 'pk') ? 'selected' : ''}>per package</option><option value="ea" ${e.by === 'ea' ? 'selected' : ''}>each</option><option value="lb" ${e.by === 'lb' ? 'selected' : ''}>per lb</option></select></label>`}
       <label>Price<input type="number" step="0.01" min="0" inputmode="decimal" id="pe-price" value="${i.price ? i.price.toFixed(2) : ''}"></label>
       ${i.extra ? '' : `<label>Aisle<select id="pe-aisle">${AISLE_ORDER.map(a => `<option ${a === i.aisle ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
-      <label>How many<span class="stepper"><button type="button" data-act="qty" data-key="${esc(i.key)}" data-d="-1">âˆ’</button><span class="num">${i.qty}</span><button type="button" data-act="qty" data-key="${esc(i.key)}" data-d="1">+</button></span></label>`}
+      <label>How many<span class="stepper"><button type="button" data-act="qty" data-key="${esc(i.key)}" data-d="-1">−</button><span class="num">${i.qty}</span><button type="button" data-act="qty" data-key="${esc(i.key)}" data-d="1">+</button></span></label>`}
       <button class="btn sm primary" type="submit">Save</button><button class="btn sm ghost" type="button" data-act="cancel-price">Cancel</button>
       ${i.extra ? `<button class="btn sm ghost danger" type="button" data-act="drop-extra" data-id="${esc(i.extraId)}">Remove</button>` : ''}
     </form>`;
@@ -691,7 +712,7 @@ function row(i) {
     <div style="min-width:0"><label class="name" for="ck-${esc(enc)}">${esc(i.name)}</label>
       ${forTxt ? `<div class="for">${esc(forTxt)}</div>` : ''}
       ${i.extra ? '' : `<button class="linkish" data-act="have" data-key="${esc(i.key)}" data-v="${i.have ? 0 : 1}">${i.have ? 'Need to buy' : 'Have it'}</button>
-      Â· <a class="linkish" href="${STORES[currentStore()].search}${encodeURIComponent(i.name)}" target="_blank" rel="noopener">Find at ${esc(storeName())}</a>`}
+      · <a class="linkish" href="${STORES[currentStore()].search}${encodeURIComponent(i.name)}" target="_blank" rel="noopener">Find at ${esc(storeName())}</a>`}
     </div>
     <div class="right"><button class="price-btn num" data-act="edit-price" data-key="${esc(i.key)}" aria-label="Edit price for ${esc(i.name)}">${i.estimate && i.priced ? '<span class="est">est</span>' : ''}<span class="amt">${i.priced ? money(i.cost) : 'add price'}</span></button>
       ${qtyTxt ? `<span class="size num">${qtyTxt}${i.price && (i.byLb || i.qty > 1) ? ` @ ${money(i.price)}${i.byLb ? '/lb' : ''}` : ''}${i.manual ? ' (set by you)' : ''}</span>` : ''}</div>
@@ -767,7 +788,7 @@ document.addEventListener('click', async e => {
     case 'edit-recipe': S.editRecipe = true; render(); break;
     case 'cancel-edit-recipe': S.editRecipe = false; render(); break;
     case 'signout': await Store.signOut(); navTo('recipes'); break;
-    case 'reload': toast('Reloadingâ€¦'); checkForUpdate(true); break;
+    case 'reload': toast('Reloading…'); checkForUpdate(true); break;
     case 'copy': {
       const txt = listAsText();
       try { await navigator.clipboard.writeText(txt); toast('List copied'); }
@@ -783,7 +804,7 @@ document.addEventListener('change', e => {
     try {
       const [p, c] = JSON.parse(el.value);
       if (p === '__account') { navTo('account'); return; }
-      if (p === '__reload') { toast('Reloadingâ€¦'); checkForUpdate(true); return; }
+      if (p === '__reload') { toast('Reloading…'); checkForUpdate(true); return; }
       S.pantry = p; S.category = c; S.q = ''; S.renamingCat = false; writePref('pantry', p);
       navTo('recipes');
     } catch {}
@@ -800,7 +821,7 @@ document.addEventListener('submit', async e => {
   if (f.id === 'auth-form') {
     const mode = (e.submitter && e.submitter.dataset.mode) || 'in';
     const email = $('#auth-email').value.trim(), pass = $('#auth-pass').value;
-    S.authMsg = { text: 'Workingâ€¦' }; render();
+    S.authMsg = { text: 'Working…' }; render();
     $('#auth-email').value = email;
     try {
       if (mode === 'up') {
@@ -831,7 +852,7 @@ document.addEventListener('submit', async e => {
   } else if (f.id === 'cat-form') {
     const r = recipeById(S.openId); if (!r) return;
     let name = $('#cat-input').value.trim().slice(0, 40);
-    // Reuse an existing category's spelling ("bbq" â†’ "BBQ").
+    // Reuse an existing category's spelling ("bbq" → "BBQ").
     const same = categoriesFor(recipeHousehold(r)).cats.find(c => c.name.toLowerCase() === name.toLowerCase());
     if (same) name = same.name;
     else name = name.charAt(0).toUpperCase() + name.slice(1);
