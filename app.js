@@ -3,6 +3,8 @@
    Data lives in Supabase (shared by the household) or, before setup, in this browser only. */
 
 const CFG = window.RECIPE_BOX_CONFIG || {};
+/* Bump together with version.json and the ?v= numbers in index.html on every publish. */
+const APP_VERSION = 10;
 const CACHE_KEY = 'recipe-box-cache-v1';
 const LOCAL_KEY = 'recipe-box-local-v1';
 
@@ -390,7 +392,9 @@ function renderPicker() {
       ${cats.map(c => opt(val(p.id, c.name), `${c.name} (${c.count})`)).join('')}
       ${none && cats.length ? opt(val(p.id, NONE), `No category (${none})`) : ''}</optgroup>`;
   }
-  if (Store === Remote) html += `<optgroup label="Account"><option value="${esc(JSON.stringify(['__account', null]))}">Account &amp; sign out</option></optgroup>`;
+  html += `<optgroup label="App">
+    <option value="${esc(JSON.stringify(['__reload', null]))}">Reload app (get latest version)</option>
+    ${Store === Remote ? `<option value="${esc(JSON.stringify(['__account', null]))}">Account &amp; sign out</option>` : ''}</optgroup>`;
   const cur = ps.find(p => p.id === S.pantry);
   const top = cur ? cur.label : 'Everyone';
   const main = S.category == null ? 'All recipes' : S.category === NONE ? 'No category' : S.category;
@@ -417,7 +421,8 @@ function viewNotMember() {
 }
 function viewAccount() {
   return `<div class="empty"><h2>Account</h2><p class="muted">Signed in as ${esc(S.user && S.user.email)}</p>
-    <p><button class="btn" data-act="signout">Sign out</button> <a class="btn ghost" href="#recipes">Back</a></p></div>`;
+    <p><button class="btn" data-act="reload">Reload app</button> <button class="btn" data-act="signout">Sign out</button> <a class="btn ghost" href="#recipes">Back</a></p>
+    <p class="note">Version ${APP_VERSION}</p></div>`;
 }
 
 function viewImporter() {
@@ -736,6 +741,7 @@ document.addEventListener('click', async e => {
     case 'edit-recipe': S.editRecipe = true; render(); break;
     case 'cancel-edit-recipe': S.editRecipe = false; render(); break;
     case 'signout': await Store.signOut(); navTo('recipes'); break;
+    case 'reload': toast('Reloading…'); checkForUpdate(true); break;
     case 'copy': {
       const txt = listAsText();
       try { await navigator.clipboard.writeText(txt); toast('List copied'); }
@@ -751,6 +757,7 @@ document.addEventListener('change', e => {
     try {
       const [p, c] = JSON.parse(el.value);
       if (p === '__account') { navTo('account'); return; }
+      if (p === '__reload') { toast('Reloading…'); checkForUpdate(true); return; }
       S.pantry = p; S.category = c; S.q = ''; S.renamingCat = false; writePref('pantry', p);
       navTo('recipes');
     } catch {}
@@ -863,6 +870,25 @@ function route(given) {
 window.addEventListener('popstate', () => route());
 window.addEventListener('hashchange', () => route());
 
+/* ---------------- updates ----------------
+   Phones (especially iPhone home-screen apps) keep an old copy of the page. On open, ask the
+   server which version is current and, if it's newer, load it under a fresh address so nothing
+   saved gets in the way. */
+let lastUpdateCheck = 0;
+async function checkForUpdate(force) {
+  if (!force && Date.now() - lastUpdateCheck < 60000) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const { v } = await res.json();
+    if (Number(v) > APP_VERSION || force) {
+      if (listOps.length) await flushList();
+      location.replace(location.pathname + '?v=' + (Number(v) || APP_VERSION) + '&t=' + Date.now() + location.hash);
+    }
+  } catch { if (force) location.reload(); }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+
 /* ---------------- boot ---------------- */
 async function refresh() {
   try { await Store.loadAll(); rebuildEntries(); cacheSave(); }
@@ -877,6 +903,7 @@ async function startSession() {
 }
 async function boot() {
   cacheLoad(); rebuildEntries(); route();
+  checkForUpdate();
   if (Remote.enabled()) {
     Store = Remote;
     try { await Remote.init(); } catch { S.ready = true; render(); toast("Couldn't reach the server. Showing what's saved on this device."); }
