@@ -96,6 +96,16 @@ Everyone on the member list shares the recipes and prices. Each **household** ha
 3. Send them the link. They tap **Create account** with that exact email.
 4. Run `supabase-update-3-pantries.sql` once. It names each household's **pantry** (its recipe collection), shown on the left of the Recipes page. Each household can rename its own pantry in the app.
 
+## Optional: Gemini for TikToks and tricky sites (free)
+
+With a free Google Gemini key, the link reader can turn a TikTok's caption **and what's said in the video** (TikTok's auto-generated captions) into a clean recipe. It also reads recipe sites that don't publish recipe data.
+
+1. Go to **aistudio.google.com**, sign in with a Google account, and click **Get API key → Create API key**. Copy the key.
+2. In Supabase, open **Edge Functions → Secrets** (or **Project Settings → Edge Functions**). Add a secret named `GEMINI_API_KEY` with the key as its value, then save.
+3. In **Edge Functions → import-recipe**, paste the latest `supabase/functions/import-recipe/index.ts` and click **Deploy**.
+
+On Google's free tier, Google may use what's sent to improve its products. Here that's public recipe pages and TikTok captions. Free-tier daily limits are far above what a household uses.
+
 ## How it works day to day
 
 - **Add a recipe:** paste a link. The app reads the recipe that the site publishes for search engines, which most big recipe sites do. If a site doesn't publish one, open "Or paste the recipe text" and paste the recipe instead.
