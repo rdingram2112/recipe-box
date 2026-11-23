@@ -1,8 +1,8 @@
 /* Layout: one calm column; sticky bar with Recipes / This week; recipe detail splits ingredients | steps on wide screens. */
 :root {
-  --bg: #f4f6f2; --surface: #ffffff; --sunk: #eaeee7; --fg: #1b231d; --muted: #5a675d; --line: #d9e0d6;
-  --accent: #2d6a3e; --accent-ink: #ffffff; --accent-soft: #e1eee3;
-  --chili: #b2441e; --est-bg: #f3ead0; --est-fg: #7a5d0f; --danger: #a8321f;
+  --bg: #faf3d6; --surface: #fffbe9; --sunk: #f2e8c2; --fg: #1f2119; --muted: #5f604d; --line: #e5d9ac;
+  --accent: #2d6a3e; --accent-ink: #ffffff; --accent-soft: #e3ecd2;
+  --chili: #b2441e; --est-bg: #f5d98a; --est-fg: #5e4600; --danger: #a8321f;
   --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
   --font-body: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   --r: 10px;

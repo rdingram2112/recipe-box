@@ -1,5 +1,5 @@
 'use strict';
-/* Our Recipe Box: shared recipes + weekly H-E-B shopping list.
+/* Pantry Prep: shared recipes + weekly H-E-B shopping list.
    Data lives in Supabase (shared by the household) or, before setup, in this browser only. */
 
 const CFG = window.RECIPE_BOX_CONFIG || {};
@@ -327,7 +327,7 @@ function render() {
   $('#account-btn').hidden = !(Store === Remote && S.user);
   const app = $('#app');
   const f = document.activeElement, focusId = f && f.id, sel = f && f.selectionStart;
-  if (!S.ready) app.innerHTML = `<div class="empty"><h2>Opening your recipe box…</h2></div>`;
+  if (!S.ready) app.innerHTML = `<div class="empty"><h2>Opening Pantry Prep…</h2></div>`;
   else if (Store === Remote && !S.user) app.innerHTML = viewAuth();
   else if (S.notMember) app.innerHTML = viewNotMember();
   else if (S.view === 'list') app.innerHTML = viewList();

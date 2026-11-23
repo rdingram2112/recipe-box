@@ -1,4 +1,4 @@
-# Putting Our Recipe Box online (free)
+# Putting Pantry Prep online (free)
 
 When you're done, the app lives at `https://YOURNAME.github.io/recipe-box/`, where YOURNAME is your GitHub username. It works on any phone, tablet or computer, whether or not this PC is on. You and your wife each sign in and see the same recipes and the same shopping list.
 
