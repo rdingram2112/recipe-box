@@ -84,6 +84,17 @@ Your wife does the same with her email.
 
 ---
 
+## Adding another household (for example, a sister)
+
+Everyone on the member list shares the recipes and prices. Each **household** has its own weekly shopping list.
+
+1. If you haven't yet, run `supabase-update-2-households.sql` once in the SQL Editor. Put your sister's email in it before you run it.
+2. To add more people later, run this, changing the email and household name. People with the same household name share a list.
+   ```sql
+   insert into public.household_members (email, household) values ('someone@example.com', 'sister');
+   ```
+3. Send them the link. They tap **Create account** with that exact email.
+
 ## How it works day to day
 
 - **Add a recipe:** paste a link. The app reads the recipe that the site publishes for search engines, which most big recipe sites do. If a site doesn't publish one, open "Or paste the recipe text" and paste the recipe instead.

@@ -49,14 +49,31 @@ const Remote = {
     const [r, p, l] = await Promise.all([
       c.from('recipes').select('id,data,created_at').order('created_at', { ascending: false }),
       c.from('prices').select('key,data'),
-      c.from('shopping_list').select('data').eq('id', 1).maybeSingle(),
+      this.listQuery(),
     ]);
     for (const x of [r, p, l]) if (x.error) throw x.error;
     S.recipes = r.data.map(x => ({ id: x.id, ...x.data, createdAt: x.created_at }));
     S.prices = Object.fromEntries(p.data.map(x => [x.key, x.data]));
     S.list = { ...emptyList(), ...((l.data && l.data.data) || {}) };
   },
-  async isMember() { const { data, error } = await this.client.rpc('is_household'); return error ? true : !!data; },
+  async isMember() {
+    const { data, error } = await this.client.rpc('is_household');
+    // Each household has its own weekly list. Before the households update is run, everyone shares the old one.
+    const h = await this.client.rpc('my_household');
+    this.household = !h.error && h.data ? h.data : null;
+    return error ? true : !!data;
+  },
+  household: null,
+  listQuery() {
+    return this.household
+      ? this.client.from('lists').select('data').eq('household', this.household).maybeSingle()
+      : this.client.from('shopping_list').select('data').eq('id', 1).maybeSingle();
+  },
+  listRow(data) {
+    const updated_at = new Date().toISOString();
+    return this.household ? this.client.from('lists').upsert({ household: this.household, data, updated_at })
+      : this.client.from('shopping_list').upsert({ id: 1, data, updated_at });
+  },
   subscribe(onChange) {
     if (this.subscribed) return;
     this.subscribed = true;
@@ -65,7 +82,9 @@ const Remote = {
     this.client.channel('recipe-box')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, bump)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'prices' }, bump)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shopping_list' }, bump)
+      .on('postgres_changes', this.household
+        ? { event: '*', schema: 'public', table: 'lists', filter: `household=eq.${this.household}` }
+        : { event: '*', schema: 'public', table: 'shopping_list' }, bump)
       .subscribe();
   },
   async addRecipe(data) {
@@ -83,11 +102,11 @@ const Remote = {
   },
   /* Apply queued list changes on top of the newest copy, so two phones don't overwrite each other. */
   async writeList(ops) {
-    const { data, error } = await this.client.from('shopping_list').select('data').eq('id', 1).maybeSingle();
+    const { data, error } = await this.listQuery();
     if (error) throw error;
     const next = { ...emptyList(), ...((data && data.data) || {}) };
     ops.forEach(fn => fn(next));
-    const { error: e2 } = await this.client.from('shopping_list').upsert({ id: 1, data: next, updated_at: new Date().toISOString() });
+    const { error: e2 } = await this.listRow(next);
     if (e2) throw e2;
     return next;
   },
@@ -379,7 +398,7 @@ function viewRecipe() {
       <div class="detail-actions">
         <button class="btn ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : "Add to this week's list"}</button>
         <button class="btn ghost" data-act="edit-recipe">Edit</button>
-        ${confirming ? `<span class="confirm">Delete this recipe for both of you? <button class="btn sm danger" data-act="delete" data-id="${esc(r.id)}">Delete</button><button class="btn sm ghost" data-act="cancel-confirm">Keep it</button></span>`
+        ${confirming ? `<span class="confirm">Delete this recipe for everyone? <button class="btn sm danger" data-act="delete" data-id="${esc(r.id)}">Delete</button><button class="btn sm ghost" data-act="cancel-confirm">Keep it</button></span>`
           : `<button class="btn ghost" data-act="ask-delete" data-id="${esc(r.id)}">Delete</button>`}
       </div>
     </div>
@@ -415,7 +434,7 @@ function viewList() {
   const groups = AISLE_ORDER.map(a => [a, need.filter(i => i.aisle === a)]).filter(([, l]) => l.length);
   const unpriced = need.filter(i => !i.priced).length;
   const newWeek = S.confirm === 'newweek'
-    ? `<span class="confirm">Clear the recipes and checkmarks for both of you? <button class="btn sm danger" data-act="new-week">Clear list</button><button class="btn sm ghost" data-act="cancel-confirm">Cancel</button></span>`
+    ? `<span class="confirm">Clear this week's recipes and checkmarks for your household? <button class="btn sm danger" data-act="new-week">Clear list</button><button class="btn sm ghost" data-act="cancel-confirm">Cancel</button></span>`
     : `<button class="btn" data-act="ask-new-week">Start a new week</button>`;
   return `<section class="summary">
       <div><div class="lbl">Estimated at H-E-B</div><div class="big num">${money(total)}</div></div>
