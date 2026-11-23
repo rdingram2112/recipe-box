@@ -155,10 +155,42 @@ const Local = {
 let Store = Local;
 
 /* ---------------- price book + ingredient math ---------------- */
+/* Stores. Built-in prices are H-E-B estimates; other stores start from those times a rough
+   factor until you correct an item there (corrections are saved per store as "store|item"). */
+const STORES = {
+  heb:     { name: 'H-E-B',      factor: 1,    search: 'https://www.heb.com/search?q=' },
+  walmart: { name: 'Walmart',    factor: 0.93, search: 'https://www.walmart.com/search?q=' },
+  sams:    { name: "Sam's Club", factor: 0.85, search: 'https://www.samsclub.com/s/' },
+  costco:  { name: 'Costco',     factor: 0.85, search: 'https://www.costco.com/CatalogSearch?keyword=' },
+};
+const currentStore = () => (STORES[S.list.store] ? S.list.store : 'heb');
+const storeName = (s = currentStore()) => STORES[s].name;
+const priceKey = (key, store = currentStore()) => (store === 'heb' ? key : `${store}|${key}`);
+let STORE_PRICES = {};
+function storeEntry(e, store) {
+  if (!e || store === 'heb') return e;
+  const o = STORE_PRICES[store] && STORE_PRICES[store][e.key];
+  if (o) {
+    const size = o.size != null && o.size !== '' ? o.size : e.size;
+    return { ...e, price: Number(o.price) || 0, size, by: o.by || e.by, per: size === e.size ? e.per : {}, yours: true };
+  }
+  return { ...e, price: Math.round(e.price * STORES[store].factor * 100) / 100, yours: false };
+}
+
 let ENTRIES = new Map();
 function rebuildEntries() {
   ENTRIES = new Map(PRICE_BOOK.map(e => [e.key, e]));
-  for (const [key, d] of Object.entries(S.prices)) {
+  STORE_PRICES = {};
+  for (const [pk, d] of Object.entries(S.prices)) {
+    const bar = pk.indexOf('|');
+    if (bar > 0 && STORES[pk.slice(0, bar)]) {
+      const store = pk.slice(0, bar), key = pk.slice(bar + 1);
+      (STORE_PRICES[store] = STORE_PRICES[store] || {})[key] = d;
+      // An item first priced at another store still needs a base entry so it can be matched.
+      if (!ENTRIES.has(key) && !S.prices[key]) ENTRIES.set(key, { key, names: [key], aisle: d.aisle || guessAisle(key), size: '', price: 0, by: d.by || 'pk', pantry: false, per: {}, lbEach: 0, product: '', yours: false });
+      continue;
+    }
+    const key = pk;
     const base = ENTRIES.get(key);
     ENTRIES.set(key, {
       key, names: [...new Set([...(base ? base.names : [key]), ...(d.names || [])])],
@@ -171,12 +203,12 @@ function rebuildEntries() {
   resolveCache.clear();
 }
 const resolveCache = new Map();
-function resolve(ing) {
-  const ck = ing.raw + '|' + (ing.key || '');
+function resolve(ing, store = currentStore()) {
+  const ck = ing.raw + '|' + (ing.key || '') + '|' + store;
   if (resolveCache.has(ck)) return resolveCache.get(ck);
   const p = parseIngredient(ing.raw);
   if (ing.key) p.key = p.full = ing.key;
-  const e = ing.key && ENTRIES.has(ing.key) ? ENTRIES.get(ing.key) : (matchEntry(p.full) || matchEntry(p.key));
+  const e = storeEntry(ing.key && ENTRIES.has(ing.key) ? ENTRIES.get(ing.key) : (matchEntry(p.full) || matchEntry(p.key)), store);
   const r = {
     p, e, itemKey: e ? e.key : p.key, aisle: e ? e.aisle : guessAisle(p.key), pantry: e ? e.pantry : false,
     buy: e ? amountToBuy(p, e) : 1, price: e ? e.price : 0,
@@ -217,13 +249,13 @@ const catMatches = r => S.category == null || (S.category === NONE ? !recipeCate
 const recipeCost = r => (r.ingredients || []).reduce((s, i) => s + resolve(i).cost, 0);
 const recipeById = id => S.recipes.find(r => r.id === id);
 
-function buildList() {
+function buildList(store = currentStore()) {
   const agg = new Map();
   for (const [rid, sel] of Object.entries(S.list.recipes || {})) {
     const r = recipeById(rid); if (!r) continue;
     const mult = Number(sel && sel.mult) || 1;
     for (const ing of r.ingredients || []) {
-      const x = resolve(ing);
+      const x = resolve(ing, store);
       if (!x.itemKey) continue;
       let a = agg.get(x.itemKey);
       if (!a) agg.set(x.itemKey, a = { key: x.itemKey, e: x.e, aisle: x.aisle, pantry: x.pantry, need: 0, uses: new Set() });
@@ -491,7 +523,7 @@ function viewRecipe() {
       <h1>${esc(r.title)}</h1>
       <div class="meta">${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}
         ${r.sourceUrl ? `<span><a href="${esc(safeUrl(r.sourceUrl))}" target="_blank" rel="noopener">Original on ${esc(host(r.sourceUrl))}</a></span>` : ''}
-        <span class="num">About ${money(recipeCost(r))} at H-E-B <span class="est">estimate</span></span></div>
+        <span class="num">About ${money(recipeCost(r))} at ${esc(storeName())} <span class="est">estimate</span></span></div>
       ${viewSetCategory(r)}
       <div class="detail-actions">
         <button class="btn ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : "Add to this week's list"}</button>
@@ -541,7 +573,7 @@ function viewList() {
   const need = items.filter(i => !i.have), have = items.filter(i => i.have);
   const total = need.reduce((s, i) => s + i.cost, 0);
   const left = need.filter(i => !i.got).length;
-  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap “Add to week” on what you want to cook. The list adds up every ingredient, grouped by aisle, with H-E-B price estimates.</p></div>${extrasBox()}`;
+  if (!sel.length && !(S.list.extras || []).length) return `<div class="empty"><h2>No recipes picked for this week</h2><p class="muted">Open <a href="#recipes">Recipes</a> and tap “Add to week” on what you want to cook. The list adds up every ingredient, grouped by aisle, with price estimates for H-E-B, Walmart, Sam's Club or Costco.</p></div>${extrasBox()}`;
   const chips = sel.map(([id, v]) => { const r = recipeById(id); const m = Number(v && v.mult) || 1; return `<span class="chip"><a href="#r-${esc(id)}">${esc(r.title)}</a>
       <span class="mult"><button data-act="mult" data-id="${esc(id)}" data-d="-1" aria-label="Fewer batches">−</button><span class="num">×${m}</span><button data-act="mult" data-id="${esc(id)}" data-d="1" aria-label="More batches">+</button></span>
       <button class="x" data-act="toggle-week" data-id="${esc(id)}" aria-label="Remove ${esc(r.title)}">✕</button></span>`; }).join('');
@@ -550,8 +582,16 @@ function viewList() {
   const newWeek = S.confirm === 'newweek'
     ? `<span class="confirm">Clear this week's recipes and checkmarks for your household? <button class="btn sm danger" data-act="new-week">Clear list</button><button class="btn sm ghost" data-act="cancel-confirm">Cancel</button></span>`
     : `<button class="btn" data-act="ask-new-week">Start a new week</button>`;
-  return `<section class="summary">
-      <div><div class="lbl">Estimated at H-E-B</div><div class="big num">${money(total)}</div></div>
+  const store = currentStore();
+  const totals = Object.keys(STORES).map(s => ({ s, total: s === store ? total : buildList(s).filter(i => !i.have).reduce((t, i) => t + i.cost, 0) }));
+  const cheapest = totals.reduce((a, b) => (b.total < a.total ? b : a));
+  const picker = `<section class="stores" aria-label="Where are you shopping?">
+      <div class="lbl">Shopping at</div>
+      <div class="store-row">${totals.map(({ s, total: t }) => `<button class="store ${s === store ? 'on' : ''}" data-act="store" data-id="${s}" aria-pressed="${s === store}">
+        <span class="store-name">${esc(STORES[s].name)}</span><span class="num">~${money(t)}</span>${s === cheapest.s && totals.length > 1 ? '<span class="best">lowest</span>' : ''}</button>`).join('')}</div>
+    </section>`;
+  return `${picker}<section class="summary">
+      <div><div class="lbl">Estimated at ${esc(storeName())}</div><div class="big num">${money(total)}</div></div>
       <div><div class="lbl">Items</div><div class="num" style="font-size:18px;font-weight:600">${left} left of ${need.length}</div></div>
       <div class="actions"><button class="btn" data-act="copy">Copy list</button>${newWeek}</div>
     </section>
@@ -561,7 +601,10 @@ function viewList() {
     ${extrasBox()}
     ${have.length ? `<section class="aisle"><h3>Already have at home (${have.length}) <button class="linkish" data-act="toggle-have-list">${S.showHave ? 'hide' : 'show'}</button></h3>
       ${S.showHave ? `<div class="rows">${have.map(row).join('')}</div>` : `<p class="note">Staples like salt and oil start here and aren't in the total. Move anything back if you're out.</p>`}</section>` : ''}
-    <p class="note">Prices marked EST are built-in estimates of regular H-E-B shelf prices; your store and sales will differ. Tap a price to correct it, and your price is used everywhere from then on.</p>`;
+    <p class="note">${store === 'heb'
+      ? 'Prices marked EST are built-in estimates of regular H-E-B shelf prices; your store and sales will differ.'
+      : `Prices marked EST are rough guesses based on H-E-B prices${store === 'sams' || store === 'costco' ? `, for the same amount. ${esc(storeName())} sells bigger packs, so your receipt total will be higher, though it costs less per ounce` : ''}.`}
+      Tap a price to correct it for ${esc(storeName())}, and your price is used everywhere from then on.</p>`;
 }
 
 function row(i) {
@@ -586,7 +629,7 @@ function row(i) {
     <div style="min-width:0"><label class="name" for="ck-${esc(enc)}">${esc(i.name)}</label>
       ${forTxt ? `<div class="for">${esc(forTxt)}</div>` : ''}
       ${i.extra ? '' : `<button class="linkish" data-act="have" data-key="${esc(i.key)}" data-v="${i.have ? 0 : 1}">${i.have ? 'Need to buy' : 'Have it'}</button>
-      · <a class="linkish" href="https://www.heb.com/search?q=${encodeURIComponent(i.name)}" target="_blank" rel="noopener">Find on H-E-B</a>`}
+      · <a class="linkish" href="${STORES[currentStore()].search}${encodeURIComponent(i.name)}" target="_blank" rel="noopener">Find at ${esc(storeName())}</a>`}
     </div>
     <div class="right"><button class="price-btn num" data-act="edit-price" data-key="${esc(i.key)}" aria-label="Edit price for ${esc(i.name)}">${i.estimate && i.priced ? '<span class="est">est</span>' : ''}<span class="amt">${i.priced ? money(i.cost) : 'add price'}</span></button>
       ${qtyTxt ? `<span class="size num">${qtyTxt}${i.price && (i.byLb || i.qty > 1) ? ` @ ${money(i.price)}${i.byLb ? '/lb' : ''}` : ''}${i.manual ? ' (set by you)' : ''}</span>` : ''}</div>
@@ -609,7 +652,7 @@ function listAsText() {
     for (const i of l) lines.push(`${i.got ? '[x]' : '[ ]'} ${i.name}${i.extra ? '' : i.byLb ? ` (~${i.qty} lb)` : i.qty > 1 ? ` x${i.qty}` : ''}${i.cost ? `  ~${money(i.cost)}` : ''}`);
     lines.push('');
   }
-  lines.push(`Estimated total: ${money(items.reduce((s, i) => s + i.cost, 0))}`);
+  lines.push(`Estimated total at ${storeName()}: ${money(items.reduce((s, i) => s + i.cost, 0))}`);
   return lines.join('\n');
 }
 
@@ -646,6 +689,7 @@ document.addEventListener('click', async e => {
       navTo('recipes'); break;
     case 'new-week': S.confirm = null; changeList(l => { l.recipes = {}; l.checked = {}; l.have = {}; l.qty = {}; l.extras = []; }); toast('List cleared for a new week'); break;
     case 'toggle-have-list': S.showHave = !S.showHave; render(); break;
+    case 'store': if (STORES[id]) { S.editing = null; changeList(l => { l.store = id; }); } break;
     case 'pantry': S.pantry = id; S.category = null; S.renamingCat = false; S.q = ''; writePref('pantry', id); render(); break;
     case 'category': S.category = S.category === el.dataset.cat ? null : el.dataset.cat; S.renamingCat = false; render(); break;
     case 'rename-cat': S.renamingCat = true; render(); setTimeout(() => { const i = $('#cat-rename-input'); if (i) { i.focus(); i.select(); } }, 0); break;
@@ -705,9 +749,10 @@ document.addEventListener('submit', async e => {
     const price = Math.max(0, Number($('#pe-price').value) || 0);
     if (k.startsWith('x:')) { const xid = k.slice(2); changeList(l => { const x = (l.extras || []).find(y => y.id === xid); if (x) x.price = price; }); }
     else {
-      const data = { ...(S.prices[k] || {}), size: $('#pe-size').value.trim(), by: $('#pe-by').value, price, aisle: $('#pe-aisle').value, updatedAt: Date.now() };
-      S.prices = { ...S.prices, [k]: data }; rebuildEntries(); cacheSave();
-      safely(Store.setPrice(k, data), 'Price saved for every recipe').catch(() => {});
+      const pk = priceKey(k);
+      const data = { ...(S.prices[pk] || {}), size: $('#pe-size').value.trim(), by: $('#pe-by').value, price, aisle: $('#pe-aisle').value, updatedAt: Date.now() };
+      S.prices = { ...S.prices, [pk]: data }; rebuildEntries(); cacheSave();
+      safely(Store.setPrice(pk, data), `${storeName()} price saved for every recipe`).catch(() => {});
     }
     S.editing = null; render();
   } else if (f.id === 'cat-form') {
