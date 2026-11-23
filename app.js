@@ -12,7 +12,10 @@ const S = {
   view: 'recipes', openId: null, q: '',
   import: null, editing: null, confirm: null, matching: null, editRecipe: false,
   showHave: false, pasteOpen: false,
+  households: {}, pantry: readPref('pantry') || 'all', renaming: false,
 };
+function readPref(k) { try { return localStorage.getItem('recipe-box-' + k); } catch { return null; } }
+function writePref(k, v) { try { localStorage.setItem('recipe-box-' + k, v); } catch {} }
 const doneSteps = new Set();
 function emptyList() { return { recipes: {}, checked: {}, have: {}, qty: {}, extras: [] }; }
 
@@ -26,8 +29,8 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString
 const clone = o => JSON.parse(JSON.stringify(o));
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2600); }
 function fmtMinutes(m) { m = Number(m) || 0; if (!m) return ''; const h = Math.floor(m / 60), r = m % 60; return h ? `${h} hr${r ? ` ${r} min` : ''}` : `${r} min`; }
-function cacheSave() { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ recipes: S.recipes, prices: S.prices, list: S.list })); } catch {} }
-function cacheLoad() { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); if (c) { S.recipes = c.recipes || []; S.prices = c.prices || {}; S.list = { ...emptyList(), ...(c.list || {}) }; } } catch {} }
+function cacheSave() { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ recipes: S.recipes, prices: S.prices, list: S.list, households: S.households })); } catch {} }
+function cacheLoad() { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); if (c) { S.recipes = c.recipes || []; S.prices = c.prices || {}; S.list = { ...emptyList(), ...(c.list || {}) }; S.households = c.households || {}; } } catch {} }
 
 /* ---------------- storage: Supabase or this-device-only ---------------- */
 const Remote = {
@@ -52,6 +55,8 @@ const Remote = {
       this.listQuery(),
     ]);
     for (const x of [r, p, l]) if (x.error) throw x.error;
+    const hh = await c.from('households').select('household,label');   // missing before update 3: ignore
+    S.households = hh.error ? {} : Object.fromEntries(hh.data.map(x => [x.household, x.label]));
     S.recipes = r.data.map(x => ({ id: x.id, ...x.data, createdAt: x.created_at }));
     S.prices = Object.fromEntries(p.data.map(x => [x.key, x.data]));
     S.list = { ...emptyList(), ...((l.data && l.data.data) || {}) };
@@ -82,6 +87,7 @@ const Remote = {
     this.client.channel('recipe-box')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, bump)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'prices' }, bump)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, bump)
       .on('postgres_changes', this.household
         ? { event: '*', schema: 'public', table: 'lists', filter: `household=eq.${this.household}` }
         : { event: '*', schema: 'public', table: 'shopping_list' }, bump)
@@ -96,6 +102,10 @@ const Remote = {
     if (error) throw error;
   },
   async deleteRecipe(id) { const { error } = await this.client.from('recipes').delete().eq('id', id); if (error) throw error; },
+  async setHouseholdName(household, label) {
+    const { error } = await this.client.from('households').upsert({ household, label });
+    if (error) throw error;
+  },
   async setPrice(key, data) {
     const { error } = await this.client.from('prices').upsert({ key, data, updated_at: new Date().toISOString() });
     if (error) throw error;
@@ -130,11 +140,12 @@ const Remote = {
 const Local = {
   read() { try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null') || { recipes: [], prices: {}, list: emptyList() }; } catch { return { recipes: [], prices: {}, list: emptyList() }; } },
   write(d) { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(d)); } catch {} },
-  async loadAll() { const d = this.read(); S.recipes = d.recipes; S.prices = d.prices; S.list = { ...emptyList(), ...d.list }; },
+  async loadAll() { const d = this.read(); S.recipes = d.recipes; S.prices = d.prices; S.list = { ...emptyList(), ...d.list }; S.households = d.households || {}; },
   async addRecipe(data) { const d = this.read(); const id = uid(); d.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() }); this.write(d); return id; },
   async updateRecipe(id, data) { const d = this.read(); d.recipes = d.recipes.map(r => r.id === id ? { id, ...data, createdAt: r.createdAt } : r); this.write(d); },
   async deleteRecipe(id) { const d = this.read(); d.recipes = d.recipes.filter(r => r.id !== id); this.write(d); },
   async setPrice(key, data) { const d = this.read(); d.prices[key] = data; this.write(d); },
+  async setHouseholdName(household, label) { const d = this.read(); d.households = { ...(d.households || {}), [household]: label }; this.write(d); S.households = d.households; },
   async writeList(ops) { const d = this.read(); const next = { ...emptyList(), ...d.list }; ops.forEach(fn => fn(next)); d.list = next; this.write(d); return next; },
   async importUrl() { throw { code: 'needs_setup' }; },
 };
@@ -171,6 +182,17 @@ function resolve(ing) {
   resolveCache.set(ck, r);
   return r;
 }
+/* ---------------- pantries (each household's recipes) ---------------- */
+const myHousehold = () => (Store === Remote && Remote.household) || 'home';
+const recipeHousehold = r => r.household || 'home';
+const pantryLabel = h => S.households[h] || (h === 'home' ? 'Home' : h.charAt(0).toUpperCase() + h.slice(1));
+function pantries() {
+  const ids = new Set([myHousehold(), ...Object.keys(S.households), ...S.recipes.map(recipeHousehold)]);
+  const mine = myHousehold();
+  return [...ids].sort((a, b) => (a === mine ? -1 : b === mine ? 1 : pantryLabel(a).localeCompare(pantryLabel(b))))
+    .map(id => ({ id, label: pantryLabel(id), mine: id === mine, count: S.recipes.filter(r => recipeHousehold(r) === id).length }));
+}
+
 const recipeCost = r => (r.ingredients || []).reduce((s, i) => s + resolve(i).cost, 0);
 const recipeById = id => S.recipes.find(r => r.id === id);
 
@@ -244,7 +266,7 @@ async function importFromUrl(url) {
       title: d.title || 'Untitled recipe', sourceUrl: url, summary: d.summary || '', servings: d.servings || '',
       totalMinutes: d.totalMinutes || 0, image: safeUrl(d.image),
       ingredients: d.ingredients.map(raw => ({ raw })), steps: groupsSeen.map(s => ({ group: s.group || '', text: s.text })),
-      addedBy: S.user ? S.user.email : '',
+      addedBy: S.user ? S.user.email : '', household: myHousehold(),
     };
     const id = await Store.addRecipe(data);
     S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
@@ -264,7 +286,7 @@ async function importFromText(text) {
   const t = parseRecipeText(text);
   if (!t.ingredients.length) { S.import = { err: "Couldn't spot the ingredients. Make sure the text includes an “Ingredients” heading or lines that start with amounts." }; render(); return; }
   const data = { title: t.title, sourceUrl: '', summary: '', servings: '', totalMinutes: 0, image: '',
-    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), addedBy: S.user ? S.user.email : '' };
+    ingredients: t.ingredients.map(raw => ({ raw })), steps: t.steps.map(text => ({ group: '', text })), addedBy: S.user ? S.user.email : '', household: myHousehold() };
   try {
     const id = await safely(Store.addRecipe(data));
     S.recipes.unshift({ id, ...data, createdAt: new Date().toISOString() });
@@ -337,14 +359,41 @@ function viewImporter() {
 
 function viewRecipes() {
   const q = S.q.trim().toLowerCase();
-  const list = S.recipes.filter(r => !q || (r.title + ' ' + (r.ingredients || []).map(i => i.raw).join(' ')).toLowerCase().includes(q));
+  const ps = pantries();
+  if (S.pantry !== 'all' && !ps.some(p => p.id === S.pantry)) S.pantry = 'all';
+  const inPantry = S.recipes.filter(r => S.pantry === 'all' || recipeHousehold(r) === S.pantry);
+  const list = inPantry.filter(r => !q || (r.title + ' ' + (r.ingredients || []).map(i => i.raw).join(' ')).toLowerCase().includes(q));
+  const cur = ps.find(p => p.id === S.pantry);
+  const heading = cur ? `${cur.label}${cur.mine ? '' : "'s pantry"}` : 'All recipes';
   let body;
   if (!S.recipes.length) body = `<div class="empty"><h2>No recipes yet</h2><p class="muted">Paste a link from a recipe site above. The app keeps just the ingredients and steps and estimates what they cost at H-E-B.</p></div>`;
+  else if (!inPantry.length) body = `<div class="empty"><h2>No recipes here yet</h2><p class="muted">${cur && cur.mine ? 'Recipes you add go in your pantry.' : `When ${esc(cur ? cur.label : 'they')} add recipes, they show up here.`}</p></div>`;
   else if (!list.length) body = `<div class="empty"><h2>Nothing matches “${esc(S.q)}”</h2><p class="muted">Try an ingredient or part of the name.</p></div>`;
   else body = `<div class="grid">${list.map(card).join('')}</div>`;
-  return `${viewImporter()}
-    ${S.recipes.length > 3 ? `<div class="toolbar"><input type="text" id="search" placeholder="Search recipes or ingredients" value="${esc(S.q)}" autocomplete="off"></div>` : ''}
-    ${body}`;
+  return `<div class="with-side">${viewPantries(ps)}
+    <div class="side-main">
+      ${viewImporter()}
+      <div class="toolbar"><h2 class="pantry-title">${esc(heading)}</h2>
+        ${inPantry.length > 3 ? `<input type="text" id="search" placeholder="Search recipes or ingredients" value="${esc(S.q)}" autocomplete="off">` : ''}</div>
+      ${body}
+    </div></div>`;
+}
+
+function viewPantries(ps) {
+  const item = (id, label, count, extra = '') => `<button class="pantry ${S.pantry === id ? 'on' : ''}" data-act="pantry" data-id="${esc(id)}" aria-pressed="${S.pantry === id}">
+      <span>${esc(label)}${extra}</span><span class="num muted">${count}</span></button>`;
+  const mine = ps.find(p => p.mine);
+  const rename = S.renaming && mine
+    ? `<form id="rename-form" class="rename"><input type="text" id="rename-input" value="${esc(mine.label)}" maxlength="40" aria-label="Pantry name"><button class="btn sm primary">Save</button><button class="btn sm ghost" type="button" data-act="cancel-rename">Cancel</button></form>`
+    : '';
+  return `<aside class="pantries" aria-label="Pantries">
+    <h3>Pantries</h3>
+    <div class="pantry-list">
+      ${item('all', 'All recipes', S.recipes.length)}
+      ${ps.map(p => item(p.id, p.label, p.count, p.mine ? ' <span class="you">you</span>' : '')).join('')}
+    </div>
+    ${rename || (mine ? `<button class="linkish rename-link" data-act="rename-pantry">Rename ${esc(mine.label)}</button>` : '')}
+  </aside>`;
 }
 
 function card(r) {
@@ -354,7 +403,7 @@ function card(r) {
     ${img ? `<a href="#r-${esc(r.id)}" tabindex="-1"><img class="thumb" src="${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()"></a>` : ''}
     <div class="body">
       <h3><a href="#r-${esc(r.id)}">${esc(r.title)}</a></h3>
-      <div class="meta">${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}${r.sourceUrl ? `<span>${esc(host(r.sourceUrl))}</span>` : ''}</div>
+      <div class="meta">${S.pantry === 'all' && pantries().length > 1 ? `<span class="tag">${esc(pantryLabel(recipeHousehold(r)))}</span>` : ''}${r.totalMinutes ? `<span>${fmtMinutes(r.totalMinutes)}</span>` : ''}${r.servings ? `<span>Serves ${esc(r.servings)}</span>` : ''}${r.sourceUrl ? `<span>${esc(host(r.sourceUrl))}</span>` : ''}</div>
       <div class="foot"><span class="cost num">~${money(recipeCost(r))} <span class="muted small" style="font-weight:400">to make</span></span>
         <button class="btn sm ${on ? '' : 'primary'}" data-act="toggle-week" data-id="${esc(r.id)}">${on ? 'In this week ✓' : 'Add to week'}</button></div>
     </div>
@@ -532,6 +581,9 @@ document.addEventListener('click', async e => {
       navTo('recipes'); break;
     case 'new-week': S.confirm = null; changeList(l => { l.recipes = {}; l.checked = {}; l.have = {}; l.qty = {}; l.extras = []; }); toast('List cleared for a new week'); break;
     case 'toggle-have-list': S.showHave = !S.showHave; render(); break;
+    case 'pantry': S.pantry = id; S.q = ''; writePref('pantry', id); render(); break;
+    case 'rename-pantry': S.renaming = true; render(); setTimeout(() => { const i = $('#rename-input'); if (i) { i.focus(); i.select(); } }, 0); break;
+    case 'cancel-rename': S.renaming = false; render(); break;
     case 'step': { const k = S.openId + ':' + el.dataset.ix; doneSteps.has(k) ? doneSteps.delete(k) : doneSteps.add(k); el.classList.toggle('done'); break; }
     case 'match': S.matching = Number(el.dataset.ix); render(); setTimeout(() => { const m = $('#match-input'); if (m) { m.focus(); m.select(); } }, 0); break;
     case 'cancel-match': S.matching = null; render(); break;
@@ -587,6 +639,16 @@ document.addEventListener('submit', async e => {
       safely(Store.setPrice(k, data), 'Price saved for every recipe').catch(() => {});
     }
     S.editing = null; render();
+  } else if (f.id === 'rename-form') {
+    const label = $('#rename-input').value.trim().slice(0, 40);
+    S.renaming = false;
+    if (label) {
+      const h = myHousehold(), before = S.households[h];
+      S.households = { ...S.households, [h]: label }; render();
+      try { await Store.setHouseholdName(h, label); toast('Pantry renamed'); }
+      catch { S.households = { ...S.households, [h]: before }; toast("Couldn't rename yet. Run update 3 in Supabase (see SETUP.md)."); }
+    }
+    render();
   } else if (f.id === 'extra-form') {
     const name = $('#extra-name').value.trim(); if (!name) return;
     $('#extra-name').value = '';

@@ -19,7 +19,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--fo
   padding-bottom: env(safe-area-inset-bottom, 0px); }
 [hidden] { display: none !important; }
 img { max-width: 100%; }
-.wrap { max-width: 920px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
 button, input, textarea, select { font: inherit; color: inherit; }
 a { color: var(--accent); }
@@ -63,6 +63,34 @@ textarea { width: 100%; min-height: 120px; resize: vertical; }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
 details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 details[open] > summary { margin-bottom: 8px; }
+
+/* Pantries: a left column on tablets and computers, a scrolling row of buttons on phones. */
+.with-side { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+.side-main { display: grid; gap: 20px; min-width: 0; }
+.pantries { position: sticky; top: calc(70px + env(safe-area-inset-top, 0px)); display: grid; gap: 8px; }
+.pantries h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-family: var(--font-body); font-weight: 600; padding: 0 10px; }
+.pantry-list { display: grid; gap: 2px; }
+.pantry { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; font-weight: 500; color: var(--fg); }
+.pantry:hover { background: var(--sunk); }
+.pantry.on { background: var(--accent-soft); color: var(--accent); }
+.pantry .you { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-left: 4px; }
+.rename-link { justify-self: start; margin-left: 10px; }
+.rename { display: grid; gap: 6px; padding: 0 4px; }
+.rename input { width: 100%; }
+.rename .btn { justify-self: start; }
+.pantry-title { font-size: 22px; margin-right: auto; }
+.tag { background: var(--sunk); color: var(--fg); border-radius: 4px; padding: 0 6px; }
+@media (max-width: 759px) {
+  .with-side { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .pantries { position: static; }
+  .pantries h3 { display: none; }
+  .pantry-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+  .pantry { width: auto; flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; }
+  .pantry.on { border-color: var(--accent); }
+  .rename-link { margin-left: 2px; }
+  .rename { grid-template-columns: minmax(0, 1fr) auto auto; padding: 0; }
+}
 
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .toolbar input { flex: 1 1 200px; min-width: 0; }

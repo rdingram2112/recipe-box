@@ -94,6 +94,7 @@ Everyone on the member list shares the recipes and prices. Each **household** ha
    insert into public.household_members (email, household) values ('someone@example.com', 'sister');
    ```
 3. Send them the link. They tap **Create account** with that exact email.
+4. Run `supabase-update-3-pantries.sql` once. It names each household's **pantry** (its recipe collection), shown on the left of the Recipes page. Each household can rename its own pantry in the app.
 
 ## How it works day to day
 
