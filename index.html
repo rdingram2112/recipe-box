@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Our Recipe Box</title>
+  <meta name="theme-color" content="#2d6a3e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Recipe Box">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="wrap">
+      <a class="brand" href="#recipes">Our Recipe Box</a>
+      <nav class="tabs" aria-label="Views">
+        <button class="tab" data-go="recipes" id="tab-recipes">Recipes</button>
+        <button class="tab" data-go="list" id="tab-list">This week <span class="count num" id="week-count" hidden>0</span></button>
+      </nav>
+      <button class="btn ghost sm" id="account-btn" hidden>Account</button>
+    </div>
+  </header>
+  <div class="banner" id="banner" hidden></div>
+  <main class="wrap" id="app">
+    <div class="empty"><h2>Opening your recipe box…</h2></div>
+  </main>
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="price-book.js"></script>
+  <script src="parse.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
